@@ -96,8 +96,10 @@ const MOCK_AI_RECORDS: AIShorthandRecord[] = Array.from({ length: 15 }).map((_, 
   userId: `user-${Math.floor(Math.random() * 20) + 1}`,
   title: `Meeting Note ${i + 1}`,
   date: new Date(Date.now() - Math.random() * 10000000000).toISOString(),
+  duration: Math.floor(Math.random() * 3600),
   status: Math.random() > 0.2 ? 'completed' : 'processing',
   createdAt: new Date(Date.now() - Math.random() * 10000000000).toISOString(),
+  updatedAt: new Date(Date.now() - Math.random() * 1000000000).toISOString(),
 }));
 
 // Helper to simulate network delay

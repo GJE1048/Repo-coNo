@@ -2,7 +2,7 @@ import { clerkClient } from "@clerk/nextjs/server";
 import { z } from "zod";
 import { createTRPCRouter, adminProcedure } from "../init";
 import { db } from "@/db";
-import { blocks, documents, workspaces } from "@/db/schema";
+import { aiShorthandRecords, blocks, documents, users, workspaces } from "@/db/schema";
 import { asc, desc, eq, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { addAdminLog, clearAdminLogs, listAdminLogs } from "@/lib/admin-log";
@@ -53,6 +53,22 @@ const updateDocumentInput = z.object({
 });
 
 const deleteDocumentInput = z.object({
+  id: z.string().min(1),
+});
+
+const getAIShorthandRecordsInput = z
+  .object({
+    page: z.number().int().min(1).optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+    search: z.string().trim().optional(),
+  })
+  .optional();
+
+const getAIShorthandDetailInput = z.object({
+  id: z.string().min(1),
+});
+
+const deleteAIShorthandRecordInput = z.object({
   id: z.string().min(1),
 });
 
@@ -376,6 +392,117 @@ export const adminRouter = createTRPCRouter({
     });
     return deleted;
   }),
+  getAIShorthandRecords: adminProcedure
+    .input(getAIShorthandRecordsInput)
+    .query(async ({ input }) => {
+      const page = input?.page ?? 1;
+      const limit = input?.limit ?? 20;
+      const search = input?.search?.trim();
+      const normalizedSearch = search?.toLowerCase();
+      const searchFilter = normalizedSearch
+        ? sql`(
+            lower(${aiShorthandRecords.title}) like ${`%${normalizedSearch}%`}
+            or lower(${users.username}) like ${`%${normalizedSearch}%`}
+            or lower(${users.clerkId}) like ${`%${normalizedSearch}%`}
+          )`
+        : undefined;
+
+      let countQuery = db
+        .select({
+          total: sql<number>`count(*)`,
+        })
+        .from(aiShorthandRecords)
+        .leftJoin(users, eq(aiShorthandRecords.userId, users.id));
+      if (searchFilter) {
+        countQuery = countQuery.where(searchFilter);
+      }
+      const [count] = await countQuery;
+
+      let recordsQuery = db
+        .select({
+          id: aiShorthandRecords.id,
+          title: aiShorthandRecords.title,
+          userId: aiShorthandRecords.userId,
+          status: aiShorthandRecords.status,
+          date: aiShorthandRecords.date,
+          duration: aiShorthandRecords.duration,
+          createdAt: aiShorthandRecords.createdAt,
+          updatedAt: aiShorthandRecords.updatedAt,
+          user: {
+            id: users.id,
+            username: users.username,
+            clerkId: users.clerkId,
+          },
+        })
+        .from(aiShorthandRecords)
+        .leftJoin(users, eq(aiShorthandRecords.userId, users.id));
+      if (searchFilter) {
+        recordsQuery = recordsQuery.where(searchFilter);
+      }
+      const data = await recordsQuery
+        .orderBy(desc(aiShorthandRecords.createdAt))
+        .limit(limit)
+        .offset((page - 1) * limit);
+
+      return {
+        data,
+        total: Number(count?.total ?? 0),
+      };
+    }),
+  getAIShorthandDetail: adminProcedure
+    .input(getAIShorthandDetailInput)
+    .query(async ({ input }) => {
+      const [record] = await db
+        .select({
+          id: aiShorthandRecords.id,
+          title: aiShorthandRecords.title,
+          userId: aiShorthandRecords.userId,
+          status: aiShorthandRecords.status,
+          date: aiShorthandRecords.date,
+          duration: aiShorthandRecords.duration,
+          audioUrl: aiShorthandRecords.audioUrl,
+          transcript: aiShorthandRecords.transcript,
+          summary: aiShorthandRecords.summary,
+          notes: aiShorthandRecords.notes,
+          createdAt: aiShorthandRecords.createdAt,
+          updatedAt: aiShorthandRecords.updatedAt,
+          user: {
+            id: users.id,
+            username: users.username,
+            clerkId: users.clerkId,
+          },
+        })
+        .from(aiShorthandRecords)
+        .leftJoin(users, eq(aiShorthandRecords.userId, users.id))
+        .where(eq(aiShorthandRecords.id, input.id));
+
+      if (!record) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "AI Shorthand record not found" });
+      }
+
+      return record;
+    }),
+  deleteAIShorthandRecord: adminProcedure
+    .input(deleteAIShorthandRecordInput)
+    .mutation(async ({ input, ctx }) => {
+      const [deleted] = await db
+        .delete(aiShorthandRecords)
+        .where(eq(aiShorthandRecords.id, input.id))
+        .returning({ id: aiShorthandRecords.id });
+
+      if (!deleted) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "AI Shorthand record not found" });
+      }
+
+      addAdminLog({
+        actor: getActor(ctx),
+        action: "ai_shorthand.delete",
+        targetType: "ai_shorthand",
+        targetId: input.id,
+      });
+
+      return deleted;
+    }),
   getAdminLogs: adminProcedure.input(getAdminLogsInput).query(({ input }) => {
     const page = input?.page ?? 1;
     const limit = input?.limit ?? 20;
