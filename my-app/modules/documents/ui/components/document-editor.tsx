@@ -158,7 +158,6 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const [error, setError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
-  const [isManualSaving, setIsManualSaving] = useState(false);
   const [isHeadingPopoverOpen, setIsHeadingPopoverOpen] = useState(false);
   const [isParagraphPopoverOpen, setIsParagraphPopoverOpen] = useState(false);
   const [isListPopoverOpen, setIsListPopoverOpen] = useState(false);
@@ -470,28 +469,6 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
       : null;
 
   const utils = trpc.useUtils();
-  const updateTitleCaches = useCallback((nextTitle: string) => {
-    utils.documents.getDocument.setData({ id: initialDocument.id }, (current) => {
-      if (!current) return current;
-      return {
-        ...current,
-        title: nextTitle,
-        updatedAt: new Date(),
-      };
-    });
-    utils.documents.getUserDocuments.setData(undefined, (current) => {
-      if (!current) return current;
-      return current.map((doc) =>
-        doc.id === initialDocument.id
-          ? {
-              ...doc,
-              title: nextTitle,
-              updatedAt: new Date(),
-            }
-          : doc
-      );
-    });
-  }, [utils, initialDocument.id]);
 
   const [clientId] = useState(() => {
     if (typeof window === "undefined") {
@@ -777,96 +754,30 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     []
   );
 
-  const persistYjsStateNow = useCallback(async () => {
+  const handleSave = useCallback(async () => {
     if (!canEditDocument) {
       showPermissionDenied();
       return;
     }
     try {
       setError(null);
-      const ydoc = ydocRef.current;
-      if (!ydoc) {
-        return;
-      }
-      const update = Y.encodeStateAsUpdate(ydoc);
-      const stateArray = Array.from(update);
-      await saveYjsStateMutation.mutateAsync({
-        documentId: initialDocument.id,
-        state: stateArray,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "保存文档内容时发生错误";
-      setError(message);
-      setToastMessage(message);
-      throw err;
-    }
-  }, [canEditDocument, saveYjsStateMutation, initialDocument.id, showPermissionDenied]);
 
-  const handleSaveTitle = useCallback(async () => {
-    if (!canEditDocument) {
-      showPermissionDenied();
-      return;
-    }
-    const nextTitle = title.trim();
-    if (!nextTitle) {
-      setError("标题不能为空");
-      setToastMessage("标题不能为空");
-      return;
-    }
-    if (nextTitle === initialDocument.title) {
-      return;
-    }
-    try {
-      setError(null);
       await updateDocumentMutation.mutateAsync({
         id: initialDocument.id,
         data: {
-          title: nextTitle,
+          title: title.trim(),
         },
       });
-      updateTitleCaches(nextTitle);
-      setLastSaved(new Date());
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "保存文档标题时发生错误";
-      setError(message);
-      setToastMessage(message);
-    }
-  }, [canEditDocument, updateDocumentMutation, initialDocument.id, initialDocument.title, title, showPermissionDenied, updateTitleCaches]);
 
-  const handleSaveAll = useCallback(async () => {
-    if (!canEditDocument) {
-      showPermissionDenied();
-      return;
-    }
-    setError(null);
-    setIsManualSaving(true);
-    const nextTitle = title.trim();
-    const tasks: Promise<unknown>[] = [];
-    tasks.push(persistYjsStateNow());
-    if (!nextTitle) {
-      setError("标题不能为空");
-      setToastMessage("标题不能为空");
-    } else if (nextTitle !== initialDocument.title) {
-      tasks.push(updateDocumentMutation.mutateAsync({
-        id: initialDocument.id,
-        data: { title: nextTitle },
-      }).then(() => {
-        updateTitleCaches(nextTitle);
-      }));
-    }
-    try {
-      await Promise.all(tasks);
       setLastSaved(new Date());
     } catch (err) {
       const message = err instanceof Error ? err.message : "保存文档时发生错误";
       setError(message);
       setToastMessage(message);
-    } finally {
-      setIsManualSaving(false);
     }
-  }, [canEditDocument, persistYjsStateNow, updateDocumentMutation, initialDocument.id, initialDocument.title, title, showPermissionDenied, updateTitleCaches]);
+  }, [canEditDocument, updateDocumentMutation, initialDocument.id, title, showPermissionDenied]);
 
-  const isSaving = updateDocumentMutation.isPending || isManualSaving;
+  const isSaving = updateDocumentMutation.isPending;
   const [isShareOpen, setIsShareOpen] = useState(false);
   const isDeletingDocument = deleteDocumentMutation.isPending;
   const isDuplicatingDocument = duplicateDocumentMutation.isPending;
@@ -1293,10 +1204,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
       return;
     }
 
-    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-    const fallbackWsUrl = `${protocol}://${window.location.hostname}:4000/ws`;
-    const rawWsUrl = process.env.NEXT_PUBLIC_REALTIME_SERVER_WS_URL || fallbackWsUrl;
-    const wsUrl = rawWsUrl.endsWith("/ws") ? rawWsUrl : `${rawWsUrl.replace(/\/+$/, "")}/ws`;
+    const wsUrl = process.env.NEXT_PUBLIC_REALTIME_SERVER_WS_URL || `ws://${window.location.hostname}:4000/ws`;
     let closed = false;
 
     const connect = () => {
@@ -1382,12 +1290,12 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   useEffect(() => {
     const timer = setTimeout(() => {
       if (canEditDocument && title !== initialDocument.title) {
-        handleSaveTitle();
+        handleSave();
       }
     }, 2000);
 
     return () => clearTimeout(timer);
-  }, [title, handleSaveTitle, initialDocument.title, canEditDocument]);
+  }, [title, handleSave, initialDocument.title, canEditDocument]);
 
   const getBlockTextContent = useCallback((block: Block | undefined) => {
     if (!block) {
@@ -1863,7 +1771,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
             机器人
           </Button>
           <Button
-            onClick={() => handleSaveAll()}
+            onClick={() => handleSave()}
             disabled={isSaving || isLoading || !canEditDocument}
             size="sm"
             className="flex items-center gap-2"

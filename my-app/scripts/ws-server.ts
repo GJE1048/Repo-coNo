@@ -49,13 +49,9 @@ const wss = new WebSocketServer({ noServer: true });
 const clients = new Set<ClientMeta>();
 
 const broadcastPresence = (documentId: string) => {
-  const onlineUsernames = Array.from(
-    new Set(
-      Array.from(clients)
-        .filter((c) => c.documentId === documentId && c.username)
-        .map((c) => c.username as string)
-    )
-  );
+  const onlineUsernames = Array.from(clients)
+    .filter((c) => c.documentId === documentId && c.username)
+    .map((c) => c.username as string);
 
   const payload = JSON.stringify({
     type: "presence",
