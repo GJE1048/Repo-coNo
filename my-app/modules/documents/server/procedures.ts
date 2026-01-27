@@ -434,11 +434,14 @@ export const documentsRouter = createTRPCRouter({
         .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
         .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
         .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
-        .where(or(
-          eq(documents.ownerId, ctx.user.id),
-          eq(documentCollaborators.userId, ctx.user.id),
-          eq(workspaces.ownerId, ctx.user.id),
-          eq(workspaceMembers.userId, ctx.user.id),
+        .where(and(
+          eq(documents.isArchived, false),
+          or(
+            eq(documents.ownerId, ctx.user.id),
+            eq(documentCollaborators.userId, ctx.user.id),
+            eq(workspaces.ownerId, ctx.user.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          ),
         ))
         .orderBy(desc(documents.updatedAt));
 
