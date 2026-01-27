@@ -2,8 +2,8 @@ import { clerkClient } from "@clerk/nextjs/server";
 import { z } from "zod";
 import { createTRPCRouter, adminProcedure } from "../init";
 import { db } from "@/db";
-import { documents, workspaces } from "@/db/schema";
-import { desc, eq, sql } from "drizzle-orm";
+import { blocks, documents, workspaces } from "@/db/schema";
+import { asc, desc, eq, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { addAdminLog, clearAdminLogs, listAdminLogs } from "@/lib/admin-log";
 
@@ -22,6 +22,9 @@ const getDocumentsInput = z
     search: z.string().trim().optional(),
   })
   .optional();
+const getDocumentDetailInput = z.object({
+  id: z.string().min(1),
+});
 
 const createUserInput = z.object({
   email: z.string().email(),
@@ -274,6 +277,47 @@ export const adminRouter = createTRPCRouter({
     return {
       data,
       total: Number(count?.total ?? 0),
+    };
+  }),
+  getDocumentDetail: adminProcedure.input(getDocumentDetailInput).query(async ({ input }) => {
+    const [document] = await db
+      .select({
+        id: documents.id,
+        title: documents.title,
+        workspaceId: documents.workspaceId,
+        ownerId: documents.ownerId,
+        isArchived: documents.isArchived,
+        createdAt: documents.createdAt,
+        updatedAt: documents.updatedAt,
+        workspace: {
+          id: workspaces.id,
+          name: workspaces.name,
+        },
+      })
+      .from(documents)
+      .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
+      .where(eq(documents.id, input.id));
+
+    if (!document) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Document not found" });
+    }
+
+    const documentBlocks = await db
+      .select({
+        id: blocks.id,
+        type: blocks.type,
+        content: blocks.content,
+        position: blocks.position,
+        createdAt: blocks.createdAt,
+        updatedAt: blocks.updatedAt,
+      })
+      .from(blocks)
+      .where(eq(blocks.documentId, input.id))
+      .orderBy(asc(blocks.position));
+
+    return {
+      document,
+      blocks: documentBlocks,
     };
   }),
   updateDocument: adminProcedure.input(updateDocumentInput).mutation(async ({ input, ctx }) => {
