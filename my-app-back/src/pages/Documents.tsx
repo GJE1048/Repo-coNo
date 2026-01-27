@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { 
   Search, 
   FileText,
   Loader2,
   Archive,
   Eye,
+  Users,
   Pencil,
   Trash2
 } from "lucide-react";
@@ -36,6 +37,9 @@ export function Documents() {
   const [page, setPage] = useState(1);
   const [editDocument, setEditDocument] = useState<{ id: string; title: string } | null>(null);
   const [editTitle, setEditTitle] = useState("");
+  const [viewDocumentId, setViewDocumentId] = useState<string | null>(null);
+  const [presenceUsers, setPresenceUsers] = useState<string[]>([]);
+  const [wsStatus, setWsStatus] = useState<"disconnected" | "connecting" | "connected">("disconnected");
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const limit = 10;
@@ -49,6 +53,10 @@ export function Documents() {
   const deleteDocumentMutation = trpc.admin.deleteDocument.useMutation({
     onSuccess: () => utils.admin.getDocuments.invalidate(),
   });
+  const documentDetailQuery = trpc.admin.getDocumentDetail.useQuery(
+    { id: viewDocumentId ?? "" },
+    { enabled: Boolean(viewDocumentId) },
+  );
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -152,6 +160,122 @@ export function Documents() {
     }
   };
 
+  useEffect(() => {
+    if (!viewDocumentId || typeof window === "undefined") {
+      setPresenceUsers([]);
+      setWsStatus("disconnected");
+      return;
+    }
+
+    const adminPresenceName = "admin-viewer";
+    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+    const fallbackWsUrl = `${protocol}://${window.location.hostname}:4000/ws`;
+    const rawUrl = import.meta.env.VITE_REALTIME_WS_URL || fallbackWsUrl;
+    const wsUrl = rawUrl.endsWith("/ws") ? rawUrl : `${rawUrl.replace(/\/+$/, "")}/ws`;
+    let closed = false;
+
+    setWsStatus("connecting");
+    const socket = new WebSocket(wsUrl);
+
+    socket.onopen = () => {
+      setWsStatus("connected");
+      socket.send(JSON.stringify({
+        type: "join_document",
+        documentId: viewDocumentId,
+        username: adminPresenceName,
+      }));
+    };
+
+    socket.onmessage = (event) => {
+      let payload: unknown;
+      try {
+        payload = JSON.parse(event.data as string);
+      } catch {
+        return;
+      }
+
+      if (!payload || typeof payload !== "object") {
+        return;
+      }
+
+      const msg = payload as {
+        type?: string;
+        documentId?: string;
+        onlineUsernames?: string[];
+      };
+
+      if (msg.type === "presence" && msg.documentId === viewDocumentId) {
+        const users = Array.isArray(msg.onlineUsernames) ? msg.onlineUsernames : [];
+        const uniqueUsers = Array.from(
+          new Set(users.filter((name) => name !== adminPresenceName))
+        ).sort((a, b) => a.localeCompare(b, "zh-CN"));
+        setPresenceUsers(uniqueUsers);
+      }
+    };
+
+    socket.onclose = () => {
+      if (!closed) {
+        setWsStatus("disconnected");
+      }
+    };
+
+    socket.onerror = () => {
+      socket.close();
+    };
+
+    return () => {
+      closed = true;
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({
+          type: "leave_document",
+          documentId: viewDocumentId,
+        }));
+        socket.close();
+      }
+      setPresenceUsers([]);
+      setWsStatus("disconnected");
+    };
+  }, [viewDocumentId]);
+
+  const documentContent = useMemo(() => {
+    const blocks = documentDetailQuery.data?.blocks ?? [];
+    if (!blocks.length) return "";
+
+    const resolveText = (block: { type: string; content: unknown }) => {
+      if (!block.content || typeof block.content !== "object") {
+        return "";
+      }
+      const content = block.content as {
+        text?: { content?: string };
+        code?: { content?: string };
+        list?: { items?: string[] };
+        todo?: { items?: { text?: string; checked?: boolean }[] };
+      };
+
+      if (block.type === "code") {
+        return content.code?.content ?? "";
+      }
+      if (block.type === "list") {
+        return (content.list?.items ?? []).join("\n");
+      }
+      if (block.type === "todo") {
+        return (content.todo?.items ?? [])
+          .map((item) => `${item?.checked ? "[x]" : "[ ]"} ${item?.text ?? ""}`.trim())
+          .join("\n");
+      }
+
+      return content.text?.content ?? "";
+    };
+
+    return blocks
+      .map((block) => {
+        const text = resolveText(block);
+        return text ? text : `[${block.type}]`;
+      })
+      .filter(Boolean)
+      .join("\n\n");
+  }, [documentDetailQuery.data?.blocks]);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -232,7 +356,11 @@ export function Documents() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
-                          <Button variant="ghost" size="icon">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => setViewDocumentId(doc.id)}
+                          >
                             <Eye className="h-4 w-4" />
                           </Button>
                           <Button
@@ -319,6 +447,54 @@ export function Documents() {
             value={editTitle}
             onChange={(event) => setEditTitle(event.target.value)}
           />
+        </div>
+      </Modal>
+
+      <Modal
+        open={Boolean(viewDocumentId)}
+        title={documentDetailQuery.data?.document.title ?? "Document Detail"}
+        onClose={() => setViewDocumentId(null)}
+        actions={<Button onClick={() => setViewDocumentId(null)}>Close</Button>}
+      >
+        <div className="space-y-4">
+          <div className="rounded-md border bg-muted/40 p-3">
+            <div className="flex items-center justify-between gap-2 text-sm">
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Users className="h-4 w-4" />
+                <span>当前在线编辑用户</span>
+              </div>
+              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                <span>在线人数: {presenceUsers.length}</span>
+                <span>WebSocket: {wsStatus}</span>
+              </div>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {presenceUsers.length ? (
+                presenceUsers.map((name) => (
+                  <Badge key={name} variant="outline">{name}</Badge>
+                ))
+              ) : (
+                <span className="text-xs text-muted-foreground">
+                  暂无在线编辑用户
+                </span>
+              )}
+            </div>
+          </div>
+
+          {documentDetailQuery.error ? (
+            <div className="text-sm text-red-500">
+              {documentDetailQuery.error.message}
+            </div>
+          ) : documentDetailQuery.isLoading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              加载文档内容中...
+            </div>
+          ) : (
+            <div className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-md border bg-background p-3 text-sm">
+              {documentContent || "暂无文档内容"}
+            </div>
+          )}
         </div>
       </Modal>
 
