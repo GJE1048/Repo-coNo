@@ -1,0 +1,9 @@
+{
+  "name": "next-pkg",
+  "private": true,
+  "workspaces": [
+    "my-app",
+    "my-app-back",
+    "packages/*"
+  ]
+}

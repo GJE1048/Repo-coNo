@@ -1,0 +1,4 @@
+packages:
+  - 'my-app'
+  - 'my-app-back'
+  - 'packages/*'
