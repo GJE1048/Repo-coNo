@@ -190,6 +190,19 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     refetchOnReconnect: false,
     refetchOnMount: false,
   });
+  const { data: yjsStateData } = trpc.documents.getDocumentYjsState.useQuery(
+    {
+      documentId: initialDocument.id,
+    },
+    {
+      enabled: !blocksLoading,
+      staleTime: 1000 * 30,
+      gcTime: 1000 * 60 * 5,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchOnMount: false,
+    }
+  );
 
   const updateDocumentMutation = trpc.documents.updateDocument.useMutation();
   const saveYjsStateMutation = trpc.documents.saveYjsState.useMutation({
@@ -212,10 +225,32 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     },
   });
 
-  const { data: userWorkspaces } = trpc.workspaces.getUserWorkspaces.useQuery();
-  const { data: documentMembersData } = trpc.documents.getDocumentMembers.useQuery({
-    documentId: initialDocument.id,
+  const shouldLoadAccess = !blocksLoading;
+  const accessQueryOptions = {
+    enabled: shouldLoadAccess,
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
+  };
+
+  const { data: userWorkspaces } = trpc.workspaces.getUserWorkspaces.useQuery(undefined, {
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
   });
+  const { data: documentMembersData } = trpc.documents.getDocumentMembers.useQuery(
+    {
+      documentId: initialDocument.id,
+    },
+    {
+      ...accessQueryOptions,
+      staleTime: 60_000,
+    }
+  );
 
   const currentWorkspace = userWorkspaces?.find((ws) => ws.id === initialDocument.workspaceId);
   const workspaceRole = currentWorkspace?.userRole ?? "creator";
@@ -225,7 +260,10 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const documentOwner = documentMembers.find((m) => m.isDocumentOwner);
   const visibleMembers = documentMembers.slice(0, 5);
   const extraMemberCount = documentMembers.length - visibleMembers.length;
-  const { data: currentUser } = trpc.documents.getCurrentUserProfile.useQuery();
+  const { data: currentUser } = trpc.documents.getCurrentUserProfile.useQuery(undefined, {
+    ...accessQueryOptions,
+    staleTime: 10 * 60_000,
+  });
   const canEditDocument = (() => {
     if (!currentUser) {
       return false;
@@ -259,6 +297,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   >([]);
 
   const ydocRef = useRef<Y.Doc | null>(null);
+  const yjsStateRef = useRef<string | null>(null);
   const blocks = useMemo(
     () => {
       const dbBlocks = blocksData?.blocks ?? [];
@@ -452,10 +491,41 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const wsRef = useRef<WebSocket | null>(null);
   const currentUserRef = useRef<CurrentUserPresence>(null);
   const awarenessRef = useRef<AwarenessLike | null>(null);
+  const skipInitialPersistRef = useRef(true);
+  const hasAppliedYjsStateRef = useRef(false);
 
   useEffect(() => {
     saveYjsStateMutationRef.current = saveYjsStateMutation;
   }, [saveYjsStateMutation]);
+
+  useEffect(() => {
+    skipInitialPersistRef.current = true;
+    hasAppliedYjsStateRef.current = false;
+    yjsStateRef.current = null;
+  }, [initialDocument.id]);
+
+  const applyYjsStateFromRef = useCallback(() => {
+    if (hasAppliedYjsStateRef.current) {
+      return;
+    }
+    const base64 = yjsStateRef.current;
+    const ydoc = ydocRef.current;
+    if (!base64 || !ydoc) {
+      return;
+    }
+    try {
+      const buffer = Buffer.from(base64, "base64");
+      const update = new Uint8Array(buffer);
+      Y.applyUpdate(ydoc, update);
+      hasAppliedYjsStateRef.current = true;
+    } catch {
+    }
+  }, []);
+
+  useEffect(() => {
+    yjsStateRef.current = yjsStateData?.yjsState ?? null;
+    applyYjsStateFromRef();
+  }, [yjsStateData?.yjsState, applyYjsStateFromRef]);
 
   useEffect(() => {
     if (!currentUser) {
@@ -983,15 +1053,6 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     }
 
     const ydoc = new Y.Doc();
-
-    if (initialDocument.yjsState && typeof initialDocument.yjsState === "string") {
-      try {
-        const buffer = Buffer.from(initialDocument.yjsState, "base64");
-        const update = new Uint8Array(buffer);
-        Y.applyUpdate(ydoc, update);
-      } catch {
-      }
-    }
     const wsUrl =
       process.env.NEXT_PUBLIC_YJS_SERVER_WS_URL ||
       `ws://${window.location.hostname}:1234`;
@@ -1003,6 +1064,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     ydocRef.current = ydoc;
     yBlocksRef.current = yBlocks;
     awarenessRef.current = awareness;
+    applyYjsStateFromRef();
 
     const localUser = currentUserRef.current;
     if (localUser && localUser.id && localUser.username) {
@@ -1027,6 +1089,11 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
       updateYjsBlocksSnapshot();
 
       if (!canEditDocument) {
+        return;
+      }
+
+      if (skipInitialPersistRef.current) {
+        skipInitialPersistRef.current = false;
         return;
       }
 
@@ -1127,7 +1194,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
       provider.destroy();
       ydoc.destroy();
     };
-  }, [initialDocument.id, canEditDocument, updateYjsBlocksSnapshot]);
+  }, [initialDocument.id, canEditDocument, updateYjsBlocksSnapshot, applyYjsStateFromRef]);
 
   useEffect(() => {
     if (typeof window === "undefined") {

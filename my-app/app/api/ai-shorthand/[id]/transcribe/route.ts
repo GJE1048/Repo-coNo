@@ -82,7 +82,6 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     const audioFile = formData.get("file");
     const durationValue = formData.get("duration");
-    const language = formData.get("language");
 
     if (!audioFile || typeof audioFile === "string") {
       return createErrorResponse({
@@ -129,7 +128,6 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       buffer: arrayBuffer,
       filename,
       mimeType,
-      language: typeof language === "string" ? language : undefined,
     });
 
     return NextResponse.json({
@@ -139,15 +137,10 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     });
   } catch (error) {
     console.error("处理录音转写失败:", error);
-    const errorCode =
-      error instanceof Error && error.message.includes("SILICONFLOW_API_KEY")
-        ? ErrorCodes.MISSING_SILICONFLOW_API_KEY
-        : ErrorCodes.STT_API_ERROR;
-
     return createErrorResponse({
       status: 500,
       error: "录音转写失败，请稍后重试",
-      errorCode,
+      errorCode: ErrorCodes.STT_API_ERROR,
     });
   }
 }
@@ -165,37 +158,20 @@ async function transcribeAudio(params: {
   buffer: ArrayBuffer;
   filename: string;
   mimeType: string;
-  language?: string;
 }) {
-  const apiKey = process.env.SILICONFLOW_API_KEY;
-
-  if (!apiKey) {
-    throw new Error("缺少 SILICONFLOW_API_KEY 环境变量");
-  }
-
   const baseUrl =
-    process.env.SILICONFLOW_STT_BASE_URL ??
-    process.env.SILICONFLOW_BASE_URL ??
-    "https://api.siliconflow.cn";
-  const model = process.env.SILICONFLOW_STT_MODEL ?? "whisper-1";
+    process.env.FUNASR_STT_BASE_URL ?? "http://localhost:5001";
+  const targetUrl = `${baseUrl.replace(/\/$/, "")}/transcribe`;
 
   const formData = new FormData();
   formData.append(
-    "file",
+    "audio",
     new Blob([params.buffer], { type: params.mimeType }),
     params.filename
   );
-  formData.append("model", model);
-  formData.append("response_format", "json");
-  if (params.language) {
-    formData.append("language", params.language);
-  }
 
-  const response = await fetch(`${baseUrl}/v1/audio/transcriptions`, {
+  const response = await fetch(targetUrl, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-    },
     body: formData,
   });
 
@@ -206,26 +182,15 @@ async function transcribeAudio(params: {
     );
   }
 
-  const rawBody = await response.text();
-  const contentType = response.headers.get("content-type") ?? "";
+  const data = (await response.json()) as {
+    text?: string;
+    transcript?: string;
+  };
 
-  if (contentType.includes("application/json")) {
-    try {
-      const json = JSON.parse(rawBody) as {
-        text?: string;
-        transcript?: string;
-      };
-      const text = json.text ?? json.transcript ?? "";
-      if (text) return text;
-    } catch (error) {
-      console.error("解析转写 JSON 失败:", error);
-    }
-  }
-
-  const fallbackText = rawBody.trim();
-  if (!fallbackText) {
+  const text = (data.text ?? data.transcript ?? "").trim();
+  if (!text) {
     throw new Error("语音转写返回内容为空");
   }
 
-  return fallbackText;
+  return text;
 }

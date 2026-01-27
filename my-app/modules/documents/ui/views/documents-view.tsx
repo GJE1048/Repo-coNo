@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useCallback } from "react";
 import Link from "next/link";
 import { trpc } from "@/trpc/client";
 import { Button } from "@/components/ui/button";
@@ -54,6 +54,17 @@ export const DocumentsView = () => {
     refetchOnWindowFocus: false,
   });
   const utils = trpc.useUtils();
+  const handlePrefetchDocument = useCallback(
+    (documentId: string) => {
+      void utils.documents.getDocument.prefetch({ id: documentId });
+      void utils.documents.getDocumentBlocksPage.prefetch({
+        documentId,
+        cursor: 0,
+        limit: 30,
+      });
+    },
+    [utils]
+  );
 
   const bindWordpressSiteMutation = trpc.documents.bindWordpressSite.useMutation({
     onSuccess: (result) => {
@@ -675,6 +686,8 @@ export const DocumentsView = () => {
                           <Link
                             href={`/documents/${doc.id}`}
                             className="flex-1"
+                            onMouseEnter={() => handlePrefetchDocument(doc.id)}
+                            onFocus={() => handlePrefetchDocument(doc.id)}
                           >
                             <h3 className="font-medium text-slate-900 dark:text-slate-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 line-clamp-2">
                               {doc.title || "未命名文档"}

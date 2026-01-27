@@ -126,6 +126,7 @@ const canEditDocumentFromAccess = (record: DocumentAccessRecord | undefined, use
 };
 
 const DOCUMENT_CACHE_TTL_SECONDS = 60;
+const DOCUMENT_YJS_CACHE_TTL_SECONDS = 60;
 const BLOCKS_FIRST_PAGE_TTL_SECONDS = 60;
 
 const wordpressAuthSchema = z.object({
@@ -479,7 +480,7 @@ export const documentsRouter = createTRPCRouter({
             isArchived: boolean;
             permissions: unknown;
             metadata: unknown;
-            yjsState: string | null;
+            yjsState?: string | null;
             createdAt: string | Date;
             updatedAt: string | Date;
             workspace: {
@@ -488,10 +489,12 @@ export const documentsRouter = createTRPCRouter({
             } | null;
           };
 
+          const { yjsState: _yjsState, ...rest } = cachedDoc;
+
           return {
-            ...cachedDoc,
-            createdAt: new Date(cachedDoc.createdAt),
-            updatedAt: new Date(cachedDoc.updatedAt),
+            ...rest,
+            createdAt: new Date(rest.createdAt),
+            updatedAt: new Date(rest.updatedAt),
           };
         }
       }
@@ -506,7 +509,6 @@ export const documentsRouter = createTRPCRouter({
           isArchived: documents.isArchived,
           permissions: documents.permissions,
           metadata: documents.metadata,
-          yjsState: documents.yjsState,
           createdAt: documents.createdAt,
           updatedAt: documents.updatedAt,
           workspace: {
@@ -540,6 +542,54 @@ export const documentsRouter = createTRPCRouter({
       }
 
       return document;
+    }),
+
+  getDocumentYjsState: protectedProcedure
+    .input(z.object({ documentId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const cacheKey = `doc:${input.documentId}:yjs`;
+
+      if (redis) {
+        const cached = await redis.get(cacheKey);
+        if (cached) {
+          return cached as { yjsState: string | null };
+        }
+      }
+
+      const [document] = await db
+        .select({
+          yjsState: documents.yjsState,
+        })
+        .from(documents)
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
+        .where(and(
+          eq(documents.id, input.documentId),
+          or(
+            eq(documents.ownerId, ctx.user.id),
+            eq(documentCollaborators.userId, ctx.user.id),
+            eq(workspaces.ownerId, ctx.user.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          )
+        ));
+
+      if (!document) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "文档不存在",
+        });
+      }
+
+      const result = {
+        yjsState: document.yjsState ?? null,
+      };
+
+      if (redis) {
+        await redis.set(cacheKey, result, { ex: DOCUMENT_YJS_CACHE_TTL_SECONDS });
+      }
+
+      return result;
     }),
 
   getDocumentMembers: protectedProcedure
@@ -780,6 +830,7 @@ export const documentsRouter = createTRPCRouter({
       if (redis) {
         await redis.del(`doc:${input.id}`);
         await redis.del(`blocks:${input.id}:page:1`);
+        await redis.del(`doc:${input.id}:yjs`);
       }
 
       return updatedDocument;
@@ -835,6 +886,7 @@ export const documentsRouter = createTRPCRouter({
       if (redis) {
         await redis.del(`doc:${input.id}`);
         await redis.del(`blocks:${input.id}:page:1`);
+        await redis.del(`doc:${input.id}:yjs`);
       }
 
       return { success: true };
@@ -1377,6 +1429,12 @@ export const documentsRouter = createTRPCRouter({
             .where(eq(documents.id, input.documentId));
         }
       });
+
+      if (redis) {
+        await redis.del(`doc:${input.documentId}`);
+        await redis.del(`blocks:${input.documentId}:page:1`);
+        await redis.del(`doc:${input.documentId}:yjs`);
+      }
 
       return { success: true, restoredVersion: input.version };
     }),
@@ -2061,6 +2119,7 @@ export const documentsRouter = createTRPCRouter({
 
       if (redis) {
         await redis.del(`doc:${input.documentId}`);
+        await redis.del(`doc:${input.documentId}:yjs`);
       }
 
       return { success: true };

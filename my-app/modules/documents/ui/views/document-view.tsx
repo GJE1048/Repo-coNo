@@ -20,7 +20,16 @@ export const DocumentView = ({ documentId }: DocumentViewProps) => {
     data: document,
     isLoading: documentLoading,
     error: documentError,
-  } = trpc.documents.getDocument.useQuery({ id: documentId });
+  } = trpc.documents.getDocument.useQuery(
+    { id: documentId },
+    {
+      staleTime: 30_000,
+      gcTime: 5 * 60_000,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchOnMount: false,
+    }
+  );
 
   const baseDocument = (document ?? optimisticDocument) as Document | undefined;
 

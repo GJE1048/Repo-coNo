@@ -10,13 +10,16 @@ interface DocumentPageProps {
 const DocumentPage = async ({ params }: DocumentPageProps) => {
   const { id } = await params;
 
-  // 在开发环境中，服务器端预取会导致认证问题，因此移除预取
-  // 数据将在客户端加载
-  // void trpc.documents.getDocument.prefetch({ id });
-  // void trpc.documents.getDocumentBlocks.prefetch({ documentId: id });
+  if (process.env.NODE_ENV === "production") {
+    void trpc.documents.getDocument.prefetch({ id });
+    void trpc.documents.getDocumentBlocksPage.prefetch({
+      documentId: id,
+      cursor: 0,
+      limit: 30,
+    });
+  }
 
   return <DocumentView documentId={id} />;
 };
 
 export default DocumentPage;
-
