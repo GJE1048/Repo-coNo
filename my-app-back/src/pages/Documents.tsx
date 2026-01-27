@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { 
   Search, 
   MoreHorizontal, 
@@ -26,34 +26,62 @@ import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { trpc } from "../lib/api";
 
-const PAGE_SIZE = 10;
-
 export function Documents() {
+  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  const { data, isLoading: loading, error } = trpc.documents.getUserDocuments.useQuery();
-
-  const filteredDocuments = useMemo(() => {
-    if (!data) return [];
-    if (!search) return data;
-    const term = search.toLowerCase();
-    return data.filter((doc) => doc.title.toLowerCase().includes(term));
-  }, [data, search]);
+  const limit = 10;
+  const { data, isLoading: loading, error } = trpc.admin.getDocuments.useQuery(
+    { page, limit, search },
+    { keepPreviousData: true },
+  );
 
   useEffect(() => {
-    setPage(1);
-  }, [search]);
+    const timer = setTimeout(() => {
+      setPage(1);
+      setSearch(searchInput.trim());
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
 
-  const totalPages = Math.max(1, Math.ceil(filteredDocuments.length / PAGE_SIZE));
+  const resolved = (() => {
+    if (Array.isArray(data) && data[0]?.result?.data?.json) {
+      return data[0].result.data.json as {
+        data: {
+          id: string;
+          title: string;
+          workspaceId: string | null;
+          isArchived: boolean;
+          createdAt: Date | string;
+          updatedAt: Date | string;
+          workspace: { id: string | null; name: string | null } | null;
+        }[];
+        total: number;
+      };
+    }
+    if (data && typeof data === "object" && "data" in (data as object)) {
+      return data as {
+        data: {
+          id: string;
+          title: string;
+          workspaceId: string | null;
+          isArchived: boolean;
+          createdAt: Date | string;
+          updatedAt: Date | string;
+          workspace: { id: string | null; name: string | null } | null;
+        }[];
+        total: number;
+      };
+    }
+    return undefined;
+  })();
+  const documents = resolved?.data ?? [];
+  const total = resolved?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
 
   useEffect(() => {
     setPage((current) => Math.min(current, totalPages));
   }, [totalPages]);
-
-  const pagedDocuments = useMemo(() => {
-    const start = (page - 1) * PAGE_SIZE;
-    return filteredDocuments.slice(start, start + PAGE_SIZE);
-  }, [filteredDocuments, page]);
 
   return (
     <div className="space-y-6">
@@ -80,8 +108,8 @@ export function Documents() {
               <input
                 placeholder="Search documents..."
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 pl-8"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
               />
             </div>
           </div>
@@ -108,7 +136,7 @@ export function Documents() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {pagedDocuments.map((doc) => (
+                  {documents.map((doc) => (
                     <TableRow key={doc.id}>
                       <TableCell>
                         <div className="flex items-center gap-2">
@@ -145,7 +173,7 @@ export function Documents() {
                       </TableCell>
                     </TableRow>
                   ))}
-                  {pagedDocuments.length === 0 && (
+                  {documents.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={5} className="text-center h-24">
                         No documents found.
