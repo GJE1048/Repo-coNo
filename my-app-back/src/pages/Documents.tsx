@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { 
   Search, 
-  MoreHorizontal, 
   FileText,
   Loader2,
   Archive,
-  Eye
+  Eye,
+  Pencil,
+  Trash2
 } from "lucide-react";
 import { 
   Card, 
@@ -25,16 +26,29 @@ import {
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { trpc } from "../lib/api";
+import { Input } from "../components/ui/input";
+import { Modal } from "../components/ui/modal";
 
 export function Documents() {
+  const utils = trpc.useUtils();
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [editDocument, setEditDocument] = useState<{ id: string; title: string } | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
   const limit = 10;
   const { data, isLoading: loading, error } = trpc.admin.getDocuments.useQuery(
     { page, limit, search },
     { keepPreviousData: true },
   );
+  const updateDocumentMutation = trpc.admin.updateDocument.useMutation({
+    onSuccess: () => utils.admin.getDocuments.invalidate(),
+  });
+  const deleteDocumentMutation = trpc.admin.deleteDocument.useMutation({
+    onSuccess: () => utils.admin.getDocuments.invalidate(),
+  });
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -82,6 +96,61 @@ export function Documents() {
   useEffect(() => {
     setPage((current) => Math.min(current, totalPages));
   }, [totalPages]);
+
+  const openRenameDocument = (document: { id: string; title: string }) => {
+    setEditDocument(document);
+    setEditTitle(document.title);
+  };
+
+  const handleUpdateDocument = async () => {
+    if (!editDocument) return;
+    const title = editTitle.trim();
+    if (!title) {
+      setMessage("Title is required.");
+      return;
+    }
+    if (title === editDocument.title) {
+      setEditDocument(null);
+      return;
+    }
+    try {
+      await updateDocumentMutation.mutateAsync({
+        id: editDocument.id,
+        title,
+      });
+      setEditDocument(null);
+    } catch (updateError) {
+      console.error("Failed to update document", updateError);
+      setMessage("Failed to update document.");
+    }
+  };
+
+  const handleToggleArchive = async (document: { id: string; isArchived: boolean }) => {
+    try {
+      await updateDocumentMutation.mutateAsync({
+        id: document.id,
+        isArchived: !document.isArchived,
+      });
+    } catch (updateError) {
+      console.error("Failed to update document", updateError);
+      setMessage("Failed to update document.");
+    }
+  };
+
+  const openDeleteDocument = (document: { id: string; title: string }) => {
+    setDeleteTarget(document);
+  };
+
+  const handleDeleteDocument = async () => {
+    if (!deleteTarget) return;
+    try {
+      await deleteDocumentMutation.mutateAsync({ id: deleteTarget.id });
+      setDeleteTarget(null);
+    } catch (deleteError) {
+      console.error("Failed to delete document", deleteError);
+      setMessage("Failed to delete document.");
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -166,8 +235,26 @@ export function Documents() {
                           <Button variant="ghost" size="icon">
                             <Eye className="h-4 w-4" />
                           </Button>
-                          <Button variant="ghost" size="icon">
-                            <MoreHorizontal className="h-4 w-4" />
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => openRenameDocument(doc)}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleToggleArchive(doc)}
+                          >
+                            <Archive className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => openDeleteDocument(doc)}
+                          >
+                            <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>
                       </TableCell>
@@ -207,6 +294,70 @@ export function Documents() {
           )}
         </CardContent>
       </Card>
+
+      <Modal
+        open={Boolean(editDocument)}
+        title="Edit Document"
+        onClose={() => setEditDocument(null)}
+        actions={
+          <>
+            <Button variant="outline" onClick={() => setEditDocument(null)}>
+              Cancel
+            </Button>
+            <Button onClick={handleUpdateDocument} disabled={updateDocumentMutation.isPending}>
+              {updateDocumentMutation.isPending ? "Saving..." : "Save"}
+            </Button>
+          </>
+        }
+      >
+        <div>
+          <label className="text-sm font-medium" htmlFor="modal-document-title">
+            Title
+          </label>
+          <Input
+            id="modal-document-title"
+            value={editTitle}
+            onChange={(event) => setEditTitle(event.target.value)}
+          />
+        </div>
+      </Modal>
+
+      <Modal
+        open={Boolean(deleteTarget)}
+        title="Delete Document"
+        onClose={() => setDeleteTarget(null)}
+        actions={
+          <>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteDocument}
+              disabled={deleteDocumentMutation.isPending}
+            >
+              {deleteDocumentMutation.isPending ? "Deleting..." : "Delete"}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-muted-foreground">
+          Are you sure you want to delete{" "}
+          <span className="font-medium text-foreground">
+            {deleteTarget?.title}
+          </span>
+          ? This cannot be undone.
+        </p>
+      </Modal>
+
+      <Modal
+        open={Boolean(message)}
+        title="Notice"
+        onClose={() => setMessage(null)}
+        actions={<Button onClick={() => setMessage(null)}>OK</Button>}
+      >
+        <p className="text-sm text-muted-foreground">{message}</p>
+      </Modal>
     </div>
   );
 }

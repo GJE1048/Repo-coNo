@@ -4,6 +4,7 @@ import { createTRPCRouter, adminProcedure } from "../init";
 import { db } from "@/db";
 import { documents, workspaces } from "@/db/schema";
 import { desc, eq, sql } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 
 const getUsersInput = z
   .object({
@@ -20,6 +21,36 @@ const getDocumentsInput = z
     search: z.string().trim().optional(),
   })
   .optional();
+
+const createUserInput = z.object({
+  email: z.string().email(),
+  username: z.string().trim().optional(),
+  password: z.string().min(8).optional(),
+  firstName: z.string().trim().optional(),
+  lastName: z.string().trim().optional(),
+});
+
+const updateUserInput = z.object({
+  userId: z.string().min(1),
+  username: z.string().trim().optional(),
+  firstName: z.string().trim().optional(),
+  lastName: z.string().trim().optional(),
+  password: z.string().min(8).optional(),
+});
+
+const deleteUserInput = z.object({
+  userId: z.string().min(1),
+});
+
+const updateDocumentInput = z.object({
+  id: z.string().min(1),
+  title: z.string().trim().min(1).optional(),
+  isArchived: z.boolean().optional(),
+});
+
+const deleteDocumentInput = z.object({
+  id: z.string().min(1),
+});
 
 const resolveUsername = (user: {
   username: string | null;
@@ -39,6 +70,28 @@ const resolveUsername = (user: {
   return user.id;
 };
 
+const normalizeOptionalString = (value?: string) => {
+  const next = value?.trim();
+  return next ? next : undefined;
+};
+
+const toUserResponse = (user: {
+  id: string;
+  username: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  emailAddresses: { id: string; emailAddress: string }[];
+  primaryEmailAddressId: string | null;
+  imageUrl: string;
+  createdAt: number | Date;
+}) => ({
+  id: user.id,
+  username: resolveUsername(user),
+  clerkId: user.id,
+  imageUrl: user.imageUrl,
+  createdAt: new Date(user.createdAt).toISOString(),
+});
+
 export const adminRouter = createTRPCRouter({
   getUsers: adminProcedure.input(getUsersInput).query(async ({ input }) => {
     const page = input?.page ?? 1;
@@ -52,15 +105,37 @@ export const adminRouter = createTRPCRouter({
     });
 
     return {
-      data: data.map((user) => ({
-        id: user.id,
-        username: resolveUsername(user),
-        clerkId: user.id,
-        imageUrl: user.imageUrl,
-        createdAt: new Date(user.createdAt).toISOString(),
-      })),
+      data: data.map(toUserResponse),
       total: totalCount,
     };
+  }),
+  createUser: adminProcedure.input(createUserInput).mutation(async ({ input }) => {
+    const password = input.password?.trim();
+    const user = await (await clerkClient()).users.createUser({
+      emailAddress: [input.email],
+      username: normalizeOptionalString(input.username),
+      password: password || undefined,
+      firstName: normalizeOptionalString(input.firstName),
+      lastName: normalizeOptionalString(input.lastName),
+      skipPasswordRequirement: !password,
+    });
+
+    return toUserResponse(user);
+  }),
+  updateUser: adminProcedure.input(updateUserInput).mutation(async ({ input }) => {
+    const password = input.password?.trim();
+    const user = await (await clerkClient()).users.updateUser(input.userId, {
+      username: normalizeOptionalString(input.username),
+      firstName: normalizeOptionalString(input.firstName),
+      lastName: normalizeOptionalString(input.lastName),
+      password: password || undefined,
+    });
+
+    return toUserResponse(user);
+  }),
+  deleteUser: adminProcedure.input(deleteUserInput).mutation(async ({ input }) => {
+    await (await clerkClient()).users.deleteUser(input.userId);
+    return { id: input.userId };
   }),
   getDocuments: adminProcedure.input(getDocumentsInput).query(async ({ input }) => {
     const page = input?.page ?? 1;
@@ -107,5 +182,36 @@ export const adminRouter = createTRPCRouter({
       data,
       total: Number(count?.total ?? 0),
     };
+  }),
+  updateDocument: adminProcedure.input(updateDocumentInput).mutation(async ({ input }) => {
+    const updates: { title?: string; isArchived?: boolean; updatedAt: Date } = {
+      updatedAt: new Date(),
+    };
+    if (input.title) updates.title = input.title;
+    if (typeof input.isArchived === "boolean") updates.isArchived = input.isArchived;
+
+    const [updated] = await db
+      .update(documents)
+      .set(updates)
+      .where(eq(documents.id, input.id))
+      .returning({ id: documents.id });
+
+    if (!updated) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Document not found" });
+    }
+
+    return updated;
+  }),
+  deleteDocument: adminProcedure.input(deleteDocumentInput).mutation(async ({ input }) => {
+    const [deleted] = await db
+      .delete(documents)
+      .where(eq(documents.id, input.id))
+      .returning({ id: documents.id });
+
+    if (!deleted) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Document not found" });
+    }
+
+    return deleted;
   }),
 });
