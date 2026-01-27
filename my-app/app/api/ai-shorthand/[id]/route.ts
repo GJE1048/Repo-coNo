@@ -65,6 +65,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     if (body.title !== undefined) updateData.title = body.title;
     if (body.duration !== undefined) updateData.duration = body.duration;
     if (body.status !== undefined) updateData.status = body.status;
+    if (body.audioUrl !== undefined) updateData.audioUrl = body.audioUrl;
     if (body.transcript !== undefined) updateData.transcript = body.transcript;
     if (body.summary !== undefined) updateData.summary = body.summary;
     if (body.notes !== undefined) updateData.notes = body.notes;

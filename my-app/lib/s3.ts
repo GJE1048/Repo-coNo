@@ -25,3 +25,18 @@ export const getUploadPresignedUrl = async (
 export const getFileUrl = (key: string) => {
   return `https://${process.env.AWS_S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
 };
+
+export const uploadObject = async (params: {
+  key: string;
+  body: Buffer;
+  contentType: string;
+}) => {
+  const command = new PutObjectCommand({
+    Bucket: process.env.AWS_S3_BUCKET_NAME!,
+    Key: params.key,
+    Body: params.body,
+    ContentType: params.contentType,
+  });
+
+  await s3Client.send(command);
+};

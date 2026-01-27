@@ -16,6 +16,7 @@ export type Record = {
   date: Date;
   duration: number; // seconds
   status: "recording" | "processing" | "completed";
+  audioUrl?: string | null;
   transcript?: string;
   summary?: string;
   notes?: string;

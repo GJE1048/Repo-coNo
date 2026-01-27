@@ -9,17 +9,12 @@ import {
     SparklesIcon, 
     AlignLeftIcon, 
     FileEditIcon, 
-    FileTypeIcon,
     MoreHorizontalIcon,
-    PlayIcon,
-    PauseIcon,
     type LucideIcon
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
 import type { Record } from "../page";
 
 interface RecordDetailProps {
@@ -32,72 +27,248 @@ type Tab = "summary" | "notes" | "transcript";
 export function RecordDetail({ record, onUpdate }: RecordDetailProps) {
   const [activeTab, setActiveTab] = useState<Tab>("summary");
   const [elapsed, setElapsed] = useState(record.duration);
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [playbackUrl, setPlaybackUrl] = useState<string | null>(
+    record.audioUrl ?? null
+  );
+  const [processingError, setProcessingError] = useState<string | null>(null);
   
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const objectUrlRef = useRef<string | null>(null);
+
+  const setPlaybackUrlSafely = (url: string | null, isObjectUrl = false) => {
+    if (objectUrlRef.current && objectUrlRef.current !== url) {
+      URL.revokeObjectURL(objectUrlRef.current);
+      objectUrlRef.current = null;
+    }
+
+    if (isObjectUrl) {
+      objectUrlRef.current = url;
+    }
+
+    setPlaybackUrl(url);
+  };
+
+  const cleanupRecorder = () => {
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.ondataavailable = null;
+      mediaRecorderRef.current.onstop = null;
+      mediaRecorderRef.current.onerror = null;
+      if (mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+      }
+      mediaRecorderRef.current = null;
+    }
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+
+    chunksRef.current = [];
+  };
 
   // 录音计时器
   useEffect(() => {
-    if (record.status === "recording") {
+    if (isRecording) {
       timerRef.current = setInterval(() => {
         setElapsed((prev) => prev + 1);
       }, 1000);
-    } else {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-      setElapsed(record.duration);
+    } else if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
     }
 
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [record.status, record.duration]);
+  }, [isRecording]);
+
+  useEffect(() => {
+    if (!isRecording) {
+      setElapsed(record.duration);
+    }
+  }, [isRecording, record.duration]);
+
+  useEffect(() => {
+    setProcessingError(null);
+    setIsRecording(false);
+    cleanupRecorder();
+    setPlaybackUrlSafely(record.audioUrl ?? null);
+  }, [record.id, record.audioUrl]);
+
+  useEffect(() => {
+    return () => {
+      cleanupRecorder();
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = null;
+      }
+    };
+  }, []);
+
+  const supportsRecording =
+    typeof window !== "undefined" &&
+    typeof navigator !== "undefined" &&
+    typeof MediaRecorder !== "undefined";
+
+  const resolveMimeType = () => {
+    if (!supportsRecording) return "";
+    const candidates = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/ogg;codecs=opus",
+      "audio/ogg",
+      "audio/mp4",
+    ];
+    return candidates.find((type) => MediaRecorder.isTypeSupported(type)) ?? "";
+  };
+
+  const handleStartRecording = async () => {
+    if (!supportsRecording) {
+      setProcessingError("当前浏览器不支持录音功能");
+      return;
+    }
+
+    try {
+      setProcessingError(null);
+      cleanupRecorder();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = resolveMimeType();
+      const recorder = new MediaRecorder(
+        stream,
+        mimeType ? { mimeType } : undefined
+      );
+
+      chunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      streamRef.current = stream;
+      setIsRecording(true);
+      setElapsed(0);
+      onUpdate({ status: "recording", duration: 0 });
+    } catch (error) {
+      console.error("启动录音失败:", error);
+      setProcessingError("无法启动录音，请检查麦克风权限");
+      cleanupRecorder();
+    }
+  };
+
+  const stopRecordingAndGetBlob = async () => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder) {
+      throw new Error("录音未启动");
+    }
+
+    return new Promise<Blob>((resolve, reject) => {
+      recorder.onstop = () => {
+        const mimeType = recorder.mimeType || "audio/webm";
+        const blob = new Blob(chunksRef.current, { type: mimeType });
+        cleanupRecorder();
+        resolve(blob);
+      };
+
+      recorder.onerror = () => {
+        cleanupRecorder();
+        reject(new Error("录音停止失败"));
+      };
+
+      if (recorder.state !== "inactive") {
+        recorder.stop();
+      } else {
+        cleanupRecorder();
+        reject(new Error("录音已停止"));
+      }
+    });
+  };
 
   // 停止录音并开始处理
   const handleStopRecording = async () => {
     onUpdate({ status: "processing", duration: elapsed });
-    
-    try {
-      // 1. 调用 AI 生成模拟转录 (在真实场景中这里应上传音频文件到 STT 服务)
-      // 这里我们复用 AI 聊天接口来生成一段逼真的会议记录
-      const transcribeRes = await fetch("/api/chat/robot", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            messages: [{ 
-                role: "user", 
-                content: "请生成一段模拟的会议录音转录文本，模拟 2-3 个人的对话，讨论关于软件开发、产品设计或项目管理的话题。内容要自然、口语化，包含一些语气词。字数在 300 字左右。直接输出内容，不要带任何前缀或后缀。" 
-            }],
-            mode: "chat"
-        })
-      });
+    setIsRecording(false);
+    setProcessingError(null);
 
-      if (!transcribeRes.ok) throw new Error("Transcription generation failed");
-      
+    try {
+      const audioBlob = await stopRecordingAndGetBlob();
+      const objectUrl = URL.createObjectURL(audioBlob);
+      setPlaybackUrlSafely(objectUrl, true);
+
+      const formData = new FormData();
+      formData.append(
+        "file",
+        audioBlob,
+        `recording-${record.id}.webm`
+      );
+      formData.append("duration", String(elapsed));
+
+      const transcribeRes = await fetch(
+        `/api/ai-shorthand/${record.id}/transcribe`,
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
+
+      if (!transcribeRes.ok) {
+        throw new Error("Transcription failed");
+      }
+
       const transcribeData = await transcribeRes.json();
-      const transcript = transcribeData.reply;
-      
-      onUpdate({ 
-          transcript: transcript
-      });
+      const transcript = transcribeData.transcript as string;
+      const audioUrl = transcribeData.audioUrl as string | undefined;
+      const duration = transcribeData.duration as number | undefined;
+
+      if (!transcript) {
+        throw new Error("Empty transcript");
+      }
+
+      if (audioUrl) {
+        setPlaybackUrlSafely(audioUrl);
+      }
+
+      const updates: Partial<Record> = {
+        transcript,
+        duration: duration ?? elapsed,
+      };
+      if (audioUrl) {
+        updates.audioUrl = audioUrl;
+      }
+
+      onUpdate(updates);
 
       // 2. 调用 AI 总结
       await generateSummary(transcript);
-
     } catch (error) {
       console.error("Processing failed:", error);
+      setProcessingError("录音处理失败，请重试");
       onUpdate({
         status: "completed",
         summary: "处理过程中发生错误，请重试。",
-        notes: "无法生成笔记。"
+        notes: "无法生成笔记。",
       });
     }
   };
 
   const generateSummary = async (text: string) => {
     try {
+      if (!text.trim()) {
+        onUpdate({
+          status: "completed",
+          summary: "暂无可总结的转录内容。",
+          notes: "暂无笔记。",
+        });
+        return;
+      }
+
       // 调用真实的 AI 接口
       const response = await fetch("/api/chat/robot", {
         method: "POST",
@@ -112,6 +283,8 @@ export function RecordDetail({ record, onUpdate }: RecordDetailProps) {
       if (!response.ok) throw new Error("API call failed");
       
       const data = await response.json();
+
+      setProcessingError(null);
       
       onUpdate({
         status: "completed",
@@ -149,20 +322,40 @@ export function RecordDetail({ record, onUpdate }: RecordDetailProps) {
             
             <div className="flex items-center gap-2">
                 {record.status === "recording" ? (
-                    <Button variant="destructive" onClick={handleStopRecording} className="animate-pulse">
-                        <StopCircleIcon className="w-4 h-4 mr-2" />
-                        停止录音 ({Math.floor(elapsed / 60)}:{(elapsed % 60).toString().padStart(2, '0')})
+                  isRecording ? (
+                    <Button
+                      variant="destructive"
+                      onClick={handleStopRecording}
+                      className="animate-pulse"
+                    >
+                      <StopCircleIcon className="w-4 h-4 mr-2" />
+                      停止录音 ({Math.floor(elapsed / 60)}:
+                      {(elapsed % 60).toString().padStart(2, "0")})
                     </Button>
+                  ) : (
+                    <Button
+                      variant="default"
+                      onClick={handleStartRecording}
+                      disabled={!supportsRecording}
+                    >
+                      <MicIcon className="w-4 h-4 mr-2" />
+                      开始录音
+                    </Button>
+                  )
                 ) : (
-                    <Button variant="outline" size="sm" disabled={record.status === "processing"}>
-                         {record.status === "processing" ? "处理中..." : "继续录音"}
-                    </Button>
+                  <Button variant="outline" size="sm" disabled>
+                    {record.status === "processing" ? "处理中..." : "录音完成"}
+                  </Button>
                 )}
                 <Button variant="ghost" size="icon">
                     <MoreHorizontalIcon className="w-4 h-4" />
                 </Button>
             </div>
         </div>
+
+        {processingError && (
+          <div className="text-sm text-destructive">{processingError}</div>
+        )}
 
         {/* Tabs */}
         <div className="flex items-center gap-1 bg-muted/50 p-1 rounded-lg w-fit">
@@ -244,27 +437,10 @@ export function RecordDetail({ record, onUpdate }: RecordDetailProps) {
         )}
       </div>
       
-      {/* Player Bar (Mock) */}
-      {record.status !== "recording" && record.status !== "processing" && (
-          <div className="border-t p-4 bg-background flex items-center gap-4">
-            <Button 
-                size="icon" 
-                variant="ghost" 
-                className="rounded-full bg-primary/10 text-primary hover:bg-primary/20"
-                onClick={() => setIsPlaying(!isPlaying)}
-            >
-                {isPlaying ? <PauseIcon className="w-5 h-5" /> : <PlayIcon className="w-5 h-5 ml-0.5" />}
-            </Button>
-            <div className="flex-1">
-                <div className="h-1 bg-muted rounded-full overflow-hidden">
-                    <div className="h-full bg-primary w-1/3 rounded-full" />
-                </div>
-                <div className="flex justify-between text-xs text-muted-foreground mt-1">
-                    <span>00:24</span>
-                    <span>{Math.floor(record.duration / 60)}:{(record.duration % 60).toString().padStart(2, '0')}</span>
-                </div>
-            </div>
-          </div>
+      {record.status === "completed" && playbackUrl && (
+        <div className="border-t p-4 bg-background">
+          <audio controls src={playbackUrl} className="w-full" />
+        </div>
       )}
     </div>
   );

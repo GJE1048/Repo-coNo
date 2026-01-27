@@ -29,6 +29,13 @@
       "when": 1769238227585,
       "tag": "0003_first_secret_warriors",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1769502058601,
+      "tag": "0004_robust_secret_warriors",
+      "breakpoints": true
     }
   ]
 }

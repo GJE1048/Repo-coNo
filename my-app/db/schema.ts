@@ -190,6 +190,7 @@ export const aiShorthandRecords = pgTable("ai_shorthand_records", {
     date: timestamp("date").notNull(),
     duration: integer("duration").notNull().default(0),
     status: text("status", { enum: ['recording', 'processing', 'completed'] }).notNull().default('recording'),
+    audioUrl: text("audio_url"),
     transcript: text("transcript"),
     summary: text("summary"),
     notes: text("notes"),
