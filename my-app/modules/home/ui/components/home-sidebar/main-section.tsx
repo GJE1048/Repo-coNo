@@ -1,0 +1,73 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { FlameIcon, HomeIcon, PlaySquareIcon, Share2Icon, GlobeIcon, MicIcon } from "lucide-react";
+
+import {
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem
+} from "@/components/ui/sidebar";
+
+const items = [
+  {
+    title: "Home",
+    url: "/",
+    icon: HomeIcon,
+  },
+  {
+    title: "Documents",
+    url: "/documents",
+    icon: PlaySquareIcon,
+  },
+  {
+    title: "共享文档",
+    url: "/documents/shared",
+    icon: Share2Icon,
+  },
+  {
+    title: "AI 语音速记",
+    url: "/ai-shorthand",
+    icon: MicIcon,
+  },
+  {
+    title: "Templates",
+    url: "/templates",
+    icon: FlameIcon,
+  },
+  {
+    title: "WordPress",
+    url: "/wordpress",
+    icon: GlobeIcon,
+  },
+];
+
+export const MainSection = () => {
+  const pathname = usePathname();
+
+  return (
+    <SidebarGroup>
+      <SidebarGroupContent>
+        <SidebarMenu>
+          {items.map((item) => (
+            <SidebarMenuItem key={item.title}>
+              <SidebarMenuButton
+                tooltip={item.title}
+                asChild
+                isActive={pathname === item.url}
+              >
+                <Link prefetch href={item.url} className="flex items-center gap-4">
+                  <item.icon />
+                  <span className="text-sm">{item.title}</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ))}
+        </SidebarMenu>
+      </SidebarGroupContent>
+    </SidebarGroup>
+  )
+}
