@@ -10,6 +10,8 @@ import { Dashboard } from './pages/Dashboard';
 import { Documents } from './pages/Documents';
 import { Users } from './pages/Users';
 import { AIShorthand } from './pages/AIShorthand';
+import { Settings } from './pages/Settings';
+import { Logs } from './pages/Logs';
 import { Login } from './pages/Login';
 import { AuthProvider } from './lib/auth';
 import { RequireAuth } from './components/auth/RequireAuth';
@@ -34,6 +36,14 @@ const appChildren = [
   {
     path: 'ai-shorthand',
     element: <AIShorthand />,
+  },
+  {
+    path: 'settings',
+    element: <Settings />,
+  },
+  {
+    path: 'logs',
+    element: <Logs />,
   },
 ];
 

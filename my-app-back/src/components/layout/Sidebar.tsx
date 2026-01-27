@@ -6,7 +6,8 @@ import {
   Settings, 
   LogOut,
   Mic,
-  Command
+  Command,
+  ScrollText
 } from "lucide-react"
 import { cn } from "../../lib/utils"
 import { useAuth } from "../../lib/auth"
@@ -16,6 +17,7 @@ const navItems = [
   { icon: Users, label: "Users", href: "users" },
   { icon: FileText, label: "Documents", href: "documents" },
   { icon: Mic, label: "AI Shorthand", href: "ai-shorthand" },
+  { icon: ScrollText, label: "Logs", href: "logs" },
   { icon: Settings, label: "Settings", href: "settings" },
 ]
 

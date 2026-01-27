@@ -1,7 +1,8 @@
 import { 
   FileText,
   LayoutDashboard,
-  CheckCircle2
+  CheckCircle2,
+  Users
 } from "lucide-react";
 import { 
   Card, 
@@ -21,21 +22,61 @@ import {
 } from "recharts";
 import { trpc } from "../lib/api";
 
-const chartData = [
-  { name: "Jan", total: 120 },
-  { name: "Feb", total: 132 },
-  { name: "Mar", total: 101 },
-  { name: "Apr", total: 134 },
-  { name: "May", total: 190 },
-  { name: "Jun", total: 150 },
-  { name: "Jul", total: 210 },
-];
-
 export function Dashboard() {
-  const { data, isLoading: loading, error } = trpc.home.getDashboardData.useQuery();
-  const stats = data?.stats;
+  const { data, isLoading: loading, error } = trpc.admin.getDashboardData.useQuery();
+  const logsQuery = trpc.admin.getAdminLogs.useQuery(
+    { page: 1, limit: 5 },
+    { keepPreviousData: true },
+  );
+  const resolved = (() => {
+    if (Array.isArray(data) && data[0]?.result?.data?.json) {
+      return data[0].result.data.json as {
+        stats: {
+          totalUsers: number;
+          totalDocuments: number;
+          activeDocuments: number;
+          workspaceCount: number;
+        };
+        chartData: { name: string; total: number }[];
+      };
+    }
+    if (data && typeof data === "object" && "stats" in (data as object)) {
+      return data as {
+        stats: {
+          totalUsers: number;
+          totalDocuments: number;
+          activeDocuments: number;
+          workspaceCount: number;
+        };
+        chartData: { name: string; total: number }[];
+      };
+    }
+    return undefined;
+  })();
+  const stats = resolved?.stats;
+  const chartData = resolved?.chartData ?? [];
+  const logsResolved = (() => {
+    const raw = logsQuery.data;
+    if (Array.isArray(raw) && raw[0]?.result?.data?.json) {
+      return raw[0].result.data.json as {
+        data: { id: string; action: string; actor: string; createdAt: string | Date }[];
+      };
+    }
+    if (raw && typeof raw === "object" && "data" in (raw as object)) {
+      return raw as { data: { id: string; action: string; actor: string; createdAt: string | Date }[] };
+    }
+    return undefined;
+  })();
+  const recentLogs = logsResolved?.data ?? [];
 
   const statsItems = [
+    {
+      title: "Total Users",
+      value: stats?.totalUsers ?? 0,
+      icon: Users,
+      color: "bg-blue-500",
+      desc: "All users"
+    },
     {
       title: "Total Documents",
       value: stats?.totalDocuments ?? 0,
@@ -75,7 +116,7 @@ export function Dashboard() {
         <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {statsItems.map((item) => (
           <Card key={item.title}>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -105,11 +146,11 @@ export function Dashboard() {
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
         <Card className="col-span-4">
           <CardHeader>
-            <CardTitle>Overview</CardTitle>
-            <CardDescription>
-              Document creation activity over time
-            </CardDescription>
-          </CardHeader>
+          <CardTitle>Overview</CardTitle>
+          <CardDescription>
+            Documents created in the last 7 days
+          </CardDescription>
+        </CardHeader>
           <CardContent className="pl-2">
             <div className="h-[350px]">
               <ResponsiveContainer width="100%" height="100%">
@@ -151,27 +192,30 @@ export function Dashboard() {
 
         <Card className="col-span-3">
           <CardHeader>
-            <CardTitle>System Status</CardTitle>
-            <CardDescription>
-              Component health check
-            </CardDescription>
+            <CardTitle>Recent Admin Activity</CardTitle>
+            <CardDescription>Latest actions performed by administrators.</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {[
-                { name: "Database", status: "Operational" },
-                { name: "Redis Cache", status: "Operational" },
-                { name: "API Gateway", status: "Operational" },
-                { name: "Storage", status: "Operational" },
-              ].map((service) => (
-                <div key={service.name} className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="h-2 w-2 rounded-full bg-green-500" />
-                    <span className="font-medium">{service.name}</span>
+              {logsQuery.isLoading ? (
+                <div className="h-24 animate-pulse rounded bg-muted" />
+              ) : recentLogs.length === 0 ? (
+                <div className="text-sm text-muted-foreground">No recent admin actions.</div>
+              ) : (
+                recentLogs.map((entry) => (
+                  <div key={entry.id} className="flex items-center justify-between">
+                    <div className="flex flex-col">
+                      <span className="text-sm font-medium">{entry.action}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {entry.actor}
+                      </span>
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      {new Date(entry.createdAt).toLocaleString()}
+                    </span>
                   </div>
-                  <span className="text-sm text-green-500">{service.status}</span>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </CardContent>
         </Card>

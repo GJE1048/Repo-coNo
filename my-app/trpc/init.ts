@@ -6,31 +6,35 @@ import { ratelimit } from "@/lib/ratelimit";
 import { ensureUserExists } from "@/lib/user-sync";
 
 const getAdminAuth = (req?: Request) => {
-  if (!req) return false;
+  if (!req) return { ok: false };
   const header = req.headers.get("authorization");
-  if (!header?.startsWith("Basic ")) return false;
+  if (!header?.startsWith("Basic ")) return { ok: false };
   const encoded = header.slice("Basic ".length).trim();
-  if (!encoded) return false;
-  if (typeof globalThis.atob !== "function") return false;
+  if (!encoded) return { ok: false };
+  if (typeof globalThis.atob !== "function") return { ok: false };
   let decoded: string;
   try {
     decoded = globalThis.atob(encoded);
   } catch {
-    return false;
+    return { ok: false };
   }
   const separatorIndex = decoded.indexOf(":");
-  if (separatorIndex < 0) return false;
+  if (separatorIndex < 0) return { ok: false };
   const username = decoded.slice(0, separatorIndex);
   const password = decoded.slice(separatorIndex + 1);
   const adminUsername = process.env.ADMIN_USERNAME ?? "admin123456";
   const adminPassword = process.env.ADMIN_PASSWORD ?? "123456";
-  return username === adminUsername && password === adminPassword;
+  if (username === adminUsername && password === adminPassword) {
+    return { ok: true, username };
+  }
+  return { ok: false };
 };
 
 export const createTRPCContext = cache(async (opts?: { req?: Request }) => {
   const { userId } = await auth();
+  const admin = getAdminAuth(opts?.req);
 
-  return { clerkUserId: userId, adminAuth: getAdminAuth(opts?.req) };
+  return { clerkUserId: userId, adminAuth: admin.ok, adminUser: admin.username };
 });
 
 export type Context = Awaited<ReturnType<typeof createTRPCContext>>

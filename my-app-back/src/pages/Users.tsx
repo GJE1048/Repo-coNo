@@ -417,7 +417,7 @@ export function Users() {
               type="password"
               value={newPassword}
               onChange={(event) => setNewPassword(event.target.value)}
-              placeholder="leave blank to auto-generate"
+              placeholder="leave blank to skip"
             />
           </div>
         </div>
