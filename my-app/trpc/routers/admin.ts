@@ -207,33 +207,49 @@ export const adminRouter = createTRPCRouter({
     fromDate.setDate(now.getDate() - 6);
     fromDate.setHours(0, 0, 0, 0);
 
-    const [docStats] = await db
-      .select({
-        totalDocuments: sql<number>`count(*)`,
-        activeDocuments: sql<number>`sum(case when ${documents.isArchived} = false then 1 else 0 end)`,
-      })
-      .from(documents);
+    let docStats: { totalDocuments: number | null; activeDocuments: number | null } | undefined;
+    let workspaceStats: { workspaceCount: number | null } | undefined;
+    let chartRows: { day: string; total: number }[] = [];
 
-    const [workspaceStats] = await db
-      .select({
-        workspaceCount: sql<number>`count(*)`,
-      })
-      .from(workspaces);
+    try {
+      [docStats] = await db
+        .select({
+          totalDocuments: sql<number>`count(*)`,
+          activeDocuments: sql<number>`sum(case when ${documents.isArchived} = false then 1 else 0 end)`,
+        })
+        .from(documents);
+    } catch (error) {
+      console.error("Dashboard stats query failed:", error);
+    }
+
+    try {
+      [workspaceStats] = await db
+        .select({
+          workspaceCount: sql<number>`count(*)`,
+        })
+        .from(workspaces);
+    } catch (error) {
+      console.error("Dashboard workspace query failed:", error);
+    }
 
     const clerkSummary = await (await clerkClient()).users.getUserList({
       limit: 1,
       offset: 0,
     });
 
-    const chartRows = await db
-      .select({
-        day: sql<string>`to_char(date_trunc('day', ${documents.createdAt}), 'YYYY-MM-DD')`,
-        total: sql<number>`count(*)`,
-      })
-      .from(documents)
-      .where(sql`${documents.createdAt} >= ${fromDate}`)
-      .groupBy(sql`date_trunc('day', ${documents.createdAt})`)
-      .orderBy(sql`date_trunc('day', ${documents.createdAt})`);
+    try {
+      chartRows = await db
+        .select({
+          day: sql<string>`to_char(date_trunc('day', ${documents.createdAt}), 'YYYY-MM-DD')`,
+          total: sql<number>`count(*)`,
+        })
+        .from(documents)
+        .where(sql`${documents.createdAt} >= ${fromDate}`)
+        .groupBy(sql`date_trunc('day', ${documents.createdAt})`)
+        .orderBy(sql`date_trunc('day', ${documents.createdAt})`);
+    } catch (error) {
+      console.error("Dashboard chart query failed:", error);
+    }
 
     const chartMap = new Map(chartRows.map((row) => [row.day, Number(row.total)]));
     const chartData = Array.from({ length: 7 }).map((_, index) => {
@@ -436,42 +452,59 @@ export const adminRouter = createTRPCRouter({
           )`
         : undefined;
 
-      let countQuery = db
-        .select({
-          total: sql<number>`count(*)`,
-        })
-        .from(aiShorthandRecords)
-        .leftJoin(users, eq(aiShorthandRecords.userId, users.id));
-      if (searchFilter) {
-        countQuery = countQuery.where(searchFilter);
-      }
-      const [count] = await countQuery;
+      let count: { total: number } | undefined;
+      let data: {
+        id: string;
+        title: string;
+        userId: string;
+        status: string;
+        date: Date;
+        duration: number;
+        createdAt: Date;
+        updatedAt: Date;
+        user: { id: string | null; username: string | null; clerkId: string | null } | null;
+      }[] = [];
 
-      let recordsQuery = db
-        .select({
-          id: aiShorthandRecords.id,
-          title: aiShorthandRecords.title,
-          userId: aiShorthandRecords.userId,
-          status: aiShorthandRecords.status,
-          date: aiShorthandRecords.date,
-          duration: aiShorthandRecords.duration,
-          createdAt: aiShorthandRecords.createdAt,
-          updatedAt: aiShorthandRecords.updatedAt,
-          user: {
-            id: users.id,
-            username: users.username,
-            clerkId: users.clerkId,
-          },
-        })
-        .from(aiShorthandRecords)
-        .leftJoin(users, eq(aiShorthandRecords.userId, users.id));
-      if (searchFilter) {
-        recordsQuery = recordsQuery.where(searchFilter);
+      try {
+        let countQuery = db
+          .select({
+            total: sql<number>`count(*)`,
+          })
+          .from(aiShorthandRecords)
+          .leftJoin(users, eq(aiShorthandRecords.userId, users.id));
+        if (searchFilter) {
+          countQuery = countQuery.where(searchFilter);
+        }
+        [count] = await countQuery;
+
+        let recordsQuery = db
+          .select({
+            id: aiShorthandRecords.id,
+            title: aiShorthandRecords.title,
+            userId: aiShorthandRecords.userId,
+            status: aiShorthandRecords.status,
+            date: aiShorthandRecords.date,
+            duration: aiShorthandRecords.duration,
+            createdAt: aiShorthandRecords.createdAt,
+            updatedAt: aiShorthandRecords.updatedAt,
+            user: {
+              id: users.id,
+              username: users.username,
+              clerkId: users.clerkId,
+            },
+          })
+          .from(aiShorthandRecords)
+          .leftJoin(users, eq(aiShorthandRecords.userId, users.id));
+        if (searchFilter) {
+          recordsQuery = recordsQuery.where(searchFilter);
+        }
+        data = await recordsQuery
+          .orderBy(desc(aiShorthandRecords.createdAt))
+          .limit(limit)
+          .offset((page - 1) * limit);
+      } catch (error) {
+        console.error("AI shorthand list query failed:", error);
       }
-      const data = await recordsQuery
-        .orderBy(desc(aiShorthandRecords.createdAt))
-        .limit(limit)
-        .offset((page - 1) * limit);
 
       await addAdminLog({
         actor: getActor(ctx),
