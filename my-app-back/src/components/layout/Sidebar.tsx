@@ -11,6 +11,7 @@ import {
 } from "lucide-react"
 import { cn } from "../../lib/utils"
 import { useAuth } from "../../lib/auth"
+import { trpc } from "../../lib/api"
 
 const navItems = [
   { icon: LayoutDashboard, label: "Dashboard", href: "dashboard" },
@@ -24,8 +25,10 @@ const navItems = [
 export function Sidebar() {
   const navigate = useNavigate()
   const { logout } = useAuth()
+  const logLogoutMutation = trpc.admin.logAdminLogout.useMutation()
 
   const handleLogout = () => {
+    logLogoutMutation.mutateAsync().catch(() => {})
     logout()
     navigate("/login", { replace: true })
   }

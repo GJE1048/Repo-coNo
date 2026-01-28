@@ -1,5 +1,9 @@
 import "server-only";
 
+import { desc, sql } from "drizzle-orm";
+import { db } from "@/db";
+import { adminLogs } from "@/db/schema";
+
 export type AdminLogEntry = {
   id: string;
   actor: string;
@@ -7,74 +11,97 @@ export type AdminLogEntry = {
   targetType: string;
   targetId?: string | null;
   detail?: string | null;
+  metadata?: Record<string, unknown> | null;
   createdAt: Date;
 };
 
-type AdminLogStore = {
-  entries: AdminLogEntry[];
-};
+export const addAdminLog = async (
+  entry: Omit<AdminLogEntry, "id" | "createdAt"> & { createdAt?: Date },
+) => {
+  try {
+    const [log] = await db
+      .insert(adminLogs)
+      .values({
+        actor: entry.actor,
+        action: entry.action,
+        targetType: entry.targetType,
+        targetId: entry.targetId ?? null,
+        detail: entry.detail ?? null,
+        metadata: entry.metadata ?? {},
+        createdAt: entry.createdAt ?? new Date(),
+      })
+      .returning();
 
-const getStore = () => {
-  const globalStore = globalThis as typeof globalThis & {
-    __adminLogStore?: AdminLogStore;
-  };
-  if (!globalStore.__adminLogStore) {
-    globalStore.__adminLogStore = { entries: [] };
+    return log;
+  } catch (error) {
+    console.error("Failed to write admin log:", error);
+    return null;
   }
-  return globalStore.__adminLogStore;
 };
 
-const createId = () => {
-  if (globalThis.crypto?.randomUUID) {
-    return globalThis.crypto.randomUUID();
-  }
-  return `log_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-};
-
-export const addAdminLog = (entry: Omit<AdminLogEntry, "id" | "createdAt"> & { createdAt?: Date }) => {
-  const store = getStore();
-  const nextEntry: AdminLogEntry = {
-    id: createId(),
-    createdAt: entry.createdAt ?? new Date(),
-    ...entry,
-  };
-  store.entries.unshift(nextEntry);
-  if (store.entries.length > 500) {
-    store.entries = store.entries.slice(0, 500);
-  }
-  return nextEntry;
-};
-
-export const listAdminLogs = (params?: {
+export const listAdminLogs = async (params?: {
   offset?: number;
   limit?: number;
   search?: string;
 }) => {
-  const store = getStore();
-  const offset = params?.offset ?? 0;
-  const limit = params?.limit ?? 50;
-  const search = params?.search?.trim().toLowerCase();
-  const filtered = search
-    ? store.entries.filter((entry) => {
-        const haystack = [
-          entry.actor,
-          entry.action,
-          entry.targetType,
-          entry.targetId ?? "",
-          entry.detail ?? "",
-        ]
-          .join(" ")
-          .toLowerCase();
-        return haystack.includes(search);
+  try {
+    const offset = params?.offset ?? 0;
+    const limit = params?.limit ?? 50;
+    const search = params?.search?.trim().toLowerCase();
+    const filter = search
+      ? sql`(
+          lower(${adminLogs.actor}) like ${`%${search}%`}
+          or lower(${adminLogs.action}) like ${`%${search}%`}
+          or lower(${adminLogs.targetType}) like ${`%${search}%`}
+          or lower(coalesce(${adminLogs.targetId}, '')) like ${`%${search}%`}
+          or lower(coalesce(${adminLogs.detail}, '')) like ${`%${search}%`}
+        )`
+      : undefined;
+
+    let countQuery = db
+      .select({
+        total: sql<number>`count(*)`,
       })
-    : store.entries;
-  return {
-    total: filtered.length,
-    data: filtered.slice(offset, offset + limit),
-  };
+      .from(adminLogs);
+    if (filter) {
+      countQuery = countQuery.where(filter);
+    }
+    const [count] = await countQuery;
+
+    let logsQuery = db
+      .select({
+        id: adminLogs.id,
+        actor: adminLogs.actor,
+        action: adminLogs.action,
+        targetType: adminLogs.targetType,
+        targetId: adminLogs.targetId,
+        detail: adminLogs.detail,
+        metadata: adminLogs.metadata,
+        createdAt: adminLogs.createdAt,
+      })
+      .from(adminLogs);
+    if (filter) {
+      logsQuery = logsQuery.where(filter);
+    }
+    const data = await logsQuery
+      .orderBy(desc(adminLogs.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    return {
+      total: Number(count?.total ?? 0),
+      data,
+    };
+  } catch (error) {
+    console.error("Failed to fetch admin logs:", error);
+    return { total: 0, data: [] };
+  }
 };
 
-export const clearAdminLogs = () => {
-  const store = getStore();
-  store.entries = [];
+export const clearAdminLogs = async () => {
+  try {
+    await db.delete(adminLogs);
+  } catch (error) {
+    console.error("Failed to clear admin logs:", error);
+  }
 };

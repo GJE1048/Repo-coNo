@@ -198,6 +198,17 @@ export const aiShorthandRecords = pgTable("ai_shorthand_records", {
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+export const adminLogs = pgTable("admin_logs", {
+    id: uuid("id").primaryKey().defaultRandom(),
+    actor: text("actor").notNull(),
+    action: text("action").notNull(),
+    targetType: text("target_type").notNull(),
+    targetId: text("target_id"),
+    detail: text("detail"),
+    metadata: jsonb("metadata").default({}),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
 // 关系定义
 export const usersRelations = relations(users, ({ many }) => ({
     documents: many(documents),

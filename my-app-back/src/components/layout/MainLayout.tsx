@@ -1,13 +1,22 @@
-import { Bell, Search } from "lucide-react"
+import { Bell, LogOut, Search } from "lucide-react"
 import { Input } from "../ui/input"
 import { Sidebar } from "./Sidebar"
-import { Outlet } from "react-router-dom"
+import { Outlet, useNavigate } from "react-router-dom"
 import { useAuth } from "../../lib/auth"
+import { trpc } from "../../lib/api"
 
 export function MainLayout() {
-  const { username } = useAuth()
+  const { username, logout } = useAuth()
+  const navigate = useNavigate()
+  const logLogoutMutation = trpc.admin.logAdminLogout.useMutation()
   const displayName = username ?? "管理员"
   const initials = displayName.slice(0, 2).toUpperCase()
+
+  const handleLogout = () => {
+    logLogoutMutation.mutateAsync().catch(() => {})
+    logout()
+    navigate("/login", { replace: true })
+  }
 
   return (
     <div className="flex h-screen w-full bg-muted/20">
@@ -35,6 +44,14 @@ export function MainLayout() {
                 {initials}
               </div>
             </div>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <LogOut className="h-4 w-4" />
+              退出
+            </button>
           </div>
         </header>
         <main className="flex-1 overflow-y-auto p-6">

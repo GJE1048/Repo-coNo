@@ -123,7 +123,7 @@ const toUserResponse = (user: {
 const getActor = (ctx: { adminUser?: string | null }) => ctx.adminUser ?? "admin";
 
 export const adminRouter = createTRPCRouter({
-  getUsers: adminProcedure.input(getUsersInput).query(async ({ input }) => {
+  getUsers: adminProcedure.input(getUsersInput).query(async ({ input, ctx }) => {
     const page = input?.page ?? 1;
     const limit = input?.limit ?? 20;
     const search = input?.search?.trim();
@@ -132,6 +132,14 @@ export const adminRouter = createTRPCRouter({
       limit,
       offset: (page - 1) * limit,
       ...(search ? { query: search } : {}),
+    });
+
+    await addAdminLog({
+      actor: getActor(ctx),
+      action: "user.list",
+      targetType: "user",
+      detail: `page=${page} limit=${limit}${search ? ` search=${search}` : ""}`,
+      metadata: { page, limit, search },
     });
 
     return {
@@ -150,7 +158,7 @@ export const adminRouter = createTRPCRouter({
       skipPasswordRequirement: !password,
     });
 
-    addAdminLog({
+    await addAdminLog({
       actor: getActor(ctx),
       action: "user.create",
       targetType: "user",
@@ -174,7 +182,7 @@ export const adminRouter = createTRPCRouter({
       input.lastName ? "lastName" : null,
       password ? "password" : null,
     ].filter(Boolean);
-    addAdminLog({
+    await addAdminLog({
       actor: getActor(ctx),
       action: "user.update",
       targetType: "user",
@@ -185,7 +193,7 @@ export const adminRouter = createTRPCRouter({
   }),
   deleteUser: adminProcedure.input(deleteUserInput).mutation(async ({ input, ctx }) => {
     await (await clerkClient()).users.deleteUser(input.userId);
-    addAdminLog({
+    await addAdminLog({
       actor: getActor(ctx),
       action: "user.delete",
       targetType: "user",
@@ -193,7 +201,7 @@ export const adminRouter = createTRPCRouter({
     });
     return { id: input.userId };
   }),
-  getDashboardData: adminProcedure.query(async () => {
+  getDashboardData: adminProcedure.query(async ({ ctx }) => {
     const now = new Date();
     const fromDate = new Date(now);
     fromDate.setDate(now.getDate() - 6);
@@ -239,6 +247,12 @@ export const adminRouter = createTRPCRouter({
       };
     });
 
+    await addAdminLog({
+      actor: getActor(ctx),
+      action: "dashboard.view",
+      targetType: "dashboard",
+    });
+
     return {
       stats: {
         totalUsers: clerkSummary.totalCount,
@@ -249,7 +263,7 @@ export const adminRouter = createTRPCRouter({
       chartData,
     };
   }),
-  getDocuments: adminProcedure.input(getDocumentsInput).query(async ({ input }) => {
+  getDocuments: adminProcedure.input(getDocumentsInput).query(async ({ input, ctx }) => {
     const page = input?.page ?? 1;
     const limit = input?.limit ?? 20;
     const search = input?.search?.trim();
@@ -290,12 +304,20 @@ export const adminRouter = createTRPCRouter({
       .limit(limit)
       .offset((page - 1) * limit);
 
+    await addAdminLog({
+      actor: getActor(ctx),
+      action: "document.list",
+      targetType: "document",
+      detail: `page=${page} limit=${limit}${search ? ` search=${search}` : ""}`,
+      metadata: { page, limit, search },
+    });
+
     return {
       data,
       total: Number(count?.total ?? 0),
     };
   }),
-  getDocumentDetail: adminProcedure.input(getDocumentDetailInput).query(async ({ input }) => {
+  getDocumentDetail: adminProcedure.input(getDocumentDetailInput).query(async ({ input, ctx }) => {
     const [document] = await db
       .select({
         id: documents.id,
@@ -331,6 +353,13 @@ export const adminRouter = createTRPCRouter({
       .where(eq(blocks.documentId, input.id))
       .orderBy(asc(blocks.position));
 
+    await addAdminLog({
+      actor: getActor(ctx),
+      action: "document.view",
+      targetType: "document",
+      targetId: input.id,
+    });
+
     return {
       document,
       blocks: documentBlocks,
@@ -365,7 +394,7 @@ export const adminRouter = createTRPCRouter({
         : input.title
           ? `title=${input.title}`
           : null;
-    addAdminLog({
+    await addAdminLog({
       actor: getActor(ctx),
       action,
       targetType: "document",
@@ -384,7 +413,7 @@ export const adminRouter = createTRPCRouter({
       throw new TRPCError({ code: "NOT_FOUND", message: "Document not found" });
     }
 
-    addAdminLog({
+    await addAdminLog({
       actor: getActor(ctx),
       action: "document.delete",
       targetType: "document",
@@ -394,7 +423,7 @@ export const adminRouter = createTRPCRouter({
   }),
   getAIShorthandRecords: adminProcedure
     .input(getAIShorthandRecordsInput)
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const page = input?.page ?? 1;
       const limit = input?.limit ?? 20;
       const search = input?.search?.trim();
@@ -444,6 +473,14 @@ export const adminRouter = createTRPCRouter({
         .limit(limit)
         .offset((page - 1) * limit);
 
+      await addAdminLog({
+        actor: getActor(ctx),
+        action: "ai_shorthand.list",
+        targetType: "ai_shorthand",
+        detail: `page=${page} limit=${limit}${search ? ` search=${search}` : ""}`,
+        metadata: { page, limit, search },
+      });
+
       return {
         data,
         total: Number(count?.total ?? 0),
@@ -451,7 +488,7 @@ export const adminRouter = createTRPCRouter({
     }),
   getAIShorthandDetail: adminProcedure
     .input(getAIShorthandDetailInput)
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const [record] = await db
         .select({
           id: aiShorthandRecords.id,
@@ -480,6 +517,13 @@ export const adminRouter = createTRPCRouter({
         throw new TRPCError({ code: "NOT_FOUND", message: "AI Shorthand record not found" });
       }
 
+      await addAdminLog({
+        actor: getActor(ctx),
+        action: "ai_shorthand.view",
+        targetType: "ai_shorthand",
+        targetId: input.id,
+      });
+
       return record;
     }),
   deleteAIShorthandRecord: adminProcedure
@@ -494,7 +538,7 @@ export const adminRouter = createTRPCRouter({
         throw new TRPCError({ code: "NOT_FOUND", message: "AI Shorthand record not found" });
       }
 
-      addAdminLog({
+      await addAdminLog({
         actor: getActor(ctx),
         action: "ai_shorthand.delete",
         targetType: "ai_shorthand",
@@ -503,20 +547,36 @@ export const adminRouter = createTRPCRouter({
 
       return deleted;
     }),
-  getAdminLogs: adminProcedure.input(getAdminLogsInput).query(({ input }) => {
+  logAdminLogin: adminProcedure.mutation(async ({ ctx }) => {
+    await addAdminLog({
+      actor: getActor(ctx),
+      action: "admin.login",
+      targetType: "admin",
+    });
+    return { ok: true };
+  }),
+  logAdminLogout: adminProcedure.mutation(async ({ ctx }) => {
+    await addAdminLog({
+      actor: getActor(ctx),
+      action: "admin.logout",
+      targetType: "admin",
+    });
+    return { ok: true };
+  }),
+  getAdminLogs: adminProcedure.input(getAdminLogsInput).query(async ({ input }) => {
     const page = input?.page ?? 1;
     const limit = input?.limit ?? 20;
     const search = input?.search?.trim();
-    const { data, total } = listAdminLogs({
+    const { data, total } = await listAdminLogs({
       offset: (page - 1) * limit,
       limit,
       search,
     });
     return { data, total };
   }),
-  clearAdminLogs: adminProcedure.mutation(({ ctx }) => {
-    clearAdminLogs();
-    addAdminLog({
+  clearAdminLogs: adminProcedure.mutation(async ({ ctx }) => {
+    await clearAdminLogs();
+    await addAdminLog({
       actor: getActor(ctx),
       action: "log.clear",
       targetType: "log",

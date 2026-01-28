@@ -11,6 +11,7 @@ import {
 } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 import { ADMIN_PASSWORD, ADMIN_USERNAME, useAuth } from '../lib/auth';
+import { trpc } from '../lib/api';
 
 type LocationState = {
   from?: {
@@ -25,6 +26,7 @@ export function Login() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const logLoginMutation = trpc.admin.logAdminLogin.useMutation();
 
   const from = (location.state as LocationState | null)?.from?.pathname ?? '/app';
 
@@ -32,11 +34,12 @@ export function Login() {
     return <Navigate to={from} replace />;
   }
 
-  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError('');
     const result = login(username, password);
     if (result.ok) {
+      logLoginMutation.mutateAsync().catch(() => {});
       navigate(from, { replace: true });
       return;
     }
