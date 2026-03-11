@@ -1,0 +1,7 @@
+.git
+.next
+node_modules
+hf-space
+.DS_Store
+.env.local
+*.log

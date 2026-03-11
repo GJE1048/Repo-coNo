@@ -1,0 +1,418 @@
+# 实时协同编辑模块
+
+## 概述
+
+实时协同编辑模块围绕「Block 结构 + Yjs」设计，目标是实现类似 Notion 的多人实时协作：
+
+- 每个 Block 是独立的协同单元，拥有稳定 ID 和类型
+- 多人可以同时编辑不同 Block，甚至同一个 Block
+- 自动冲突解决、离线编辑与在线同步
+- 支持光标和选区同步、在线状态展示
+
+当前代码基于「操作日志 + WebSocket」实现增量同步，本模块文档在此基础上给出引入 Yjs 的完整方案。
+
+## 技术实现
+
+### 核心技术栈
+
+- **协作算法**: Yjs（CRDT 实现）
+- **实时通信**: 原生 WebSocket（服务端使用 `ws`，客户端使用 `WebSocket` API）
+- **文档模型**: Block 列表 + Block 内容
+- **状态同步**:
+  - Block 列表与元信息：使用 `Y.Array<Y.Map>`
+  - Block 文本内容：使用 `Y.Text` 或 `Y.XmlFragment`
+  - 在线状态与光标：使用 Yjs Awareness 协议
+
+### 数据结构设计：Block + Yjs
+
+在 Yjs 中，为每个文档创建一个 `Y.Doc`，并在其中维护一个 Block 列表：
+
+```ts
+// 协同文档
+const ydoc = new Y.Doc();
+
+// Block 列表，保持顺序
+const yBlocks = ydoc.getArray<Y.Map<unknown>>("blocks");
+
+// Block 的通用结构
+interface BlockSnapshot {
+  id: string;
+  type: "paragraph" | "heading" | "todo" | "code" | string;
+  props: Record<string, unknown>;
+  contentType: "text" | "richtext" | "none";
+  children?: string[];
+}
+
+// 创建一个段落 Block
+const yBlock = new Y.Map<unknown>();
+yBlock.set("id", "blk_1");
+yBlock.set("type", "paragraph");
+yBlock.set("props", {});
+yBlock.set("contentType", "text");
+yBlock.set("content", new Y.Text("Hello world"));
+
+yBlocks.push([yBlock]);
+```
+
+数据库中的 `blocks` 表仍然存在，负责：
+
+- 存储 Block 的持久快照（便于查询和权限控制）
+- 作为 Yjs 状态的初始快照来源
+- 在需要时用于索引和统计（例如「查找所有待办项」）
+
+## 核心功能
+
+### 1. 多用户并发编辑
+
+**房间模型**:
+- 每个文档对应一个协同房间（documentId）
+- 客户端通过 WebSocket 连接到对应房间，并加入 Yjs 文档
+
+**客户端集成（示意）**:
+
+```ts
+// hooks/useYjsBlocksCollab.ts
+import * as Y from "yjs";
+import { WebsocketProvider } from "y-websocket";
+import { useEffect, useState } from "react";
+
+type BlockView = {
+  id: string;
+  type: string;
+  props: Record<string, unknown>;
+  content: string;
+};
+
+export function useYjsBlocksCollab(documentId: string) {
+  const [blocks, setBlocks] = useState<BlockView[]>([]);
+
+  useEffect(() => {
+    const ydoc = new Y.Doc();
+    const provider = new WebsocketProvider(
+      "ws://localhost:1234", // Yjs WebSocket 服务地址
+      documentId,
+      ydoc
+    );
+
+    const yBlocks = ydoc.getArray<Y.Map<unknown>>("blocks");
+
+    const updateBlocks = () => {
+      const snapshots = yBlocks.toArray().map((yb) => {
+        const content = yb.get("content");
+        return {
+          id: yb.get("id") as string,
+          type: (yb.get("type") as string) ?? "paragraph",
+          props: (yb.get("props") as Record<string, unknown>) ?? {},
+          content: content instanceof Y.Text ? content.toString() : "",
+        };
+      });
+      setBlocks(snapshots);
+    };
+
+    yBlocks.observe(updateBlocks);
+    updateBlocks();
+
+    return () => {
+      yBlocks.unobserve(updateBlocks);
+      provider.destroy();
+      ydoc.destroy();
+    };
+  }, [documentId]);
+
+  return { blocks };
+}
+```
+
+Block 组件在编辑时，不再直接调用后端 API，而是直接修改对应的 Yjs 节点：
+
+```ts
+function updateBlockContent(yBlock: Y.Map<unknown>, text: string) {
+  const yContent = yBlock.get("content");
+  if (yContent instanceof Y.Text) {
+    yContent.delete(0, yContent.length);
+    yContent.insert(0, text);
+  }
+}
+```
+
+所有变更通过 Yjs 自动广播到其他协作者。
+
+### 2. 冲突解决机制
+
+**CRDT（Yjs）带来的能力**:
+- 无需手写 OT 算法，所有并发写入自动合并
+- 支持离线编辑，恢复网络后自动同步
+- 操作顺序无关性，保证最终一致性
+
+在本系统中：
+- Block 顺序冲突由 `Y.Array` 层解决（插入/删除同一位置）
+- Block 内容冲突由 `Y.Text` / `Y.XmlFragment` 解决
+- Block 属性冲突由 `Y.Map` 字段级 CRDT 解决
+
+### 3. 实时可视化反馈
+
+**在线状态与光标**:
+
+- 使用 Yjs Awareness 维护每个用户的 presence 信息
+- 在本地设置当前用户状态：
+
+```ts
+const awareness = provider.awareness;
+
+awareness.setLocalState({
+  user: {
+    id: currentUser.id,
+    name: currentUser.username,
+    color: "#ff0000",
+  },
+  cursor: {
+    anchor: 5,
+    head: 10,
+    blockId: "blk_1",
+  },
+});
+```
+
+- 监听其他用户状态变化：
+
+```ts
+awareness.on("change", () => {
+  const states = awareness.getStates();
+  // 根据 states 渲染其他用户的光标和选区
+});
+```
+
+**与现有在线状态模块的关系**:
+
+- 现有的 `/scripts/ws-server.ts` 已实现：
+  - 文档房间内的在线用户列表
+  - `presence` 消息广播
+- 引入 Yjs 后，可以逐步将在线状态统一到 Awareness 上，前端仍通过 WebSocket 获取在线用户信息，但数据来源改为 Yjs Provider。
+
+### 4. 性能优化
+
+**操作压缩**:
+- 批量处理连续操作
+- 压缩重复操作序列
+- 智能合并相似操作
+
+**网络优化**:
+- WebSocket 连接复用
+- 二进制数据传输
+- 自适应心跳检测
+
+**内存管理**:
+- 定期清理历史操作
+- 垃圾回收机制
+- 内存使用监控
+
+## API 接口设计
+
+### WebSocket 事件
+
+```typescript
+// 加入文档编辑
+socket.emit('join-document', { documentId, userId });
+
+// 离开文档编辑
+socket.emit('leave-document', { documentId, userId });
+
+// 发送操作
+socket.emit('operation', {
+  documentId,
+  operation: OperationData,
+  version: number
+});
+
+// 接收操作
+socket.on('operation', (data: { operation: OperationData, userId: string }));
+
+// 用户状态更新
+socket.on('user-status', (users: UserStatus[]));
+
+// 文档锁定
+socket.emit('lock-document', { documentId, reason: string });
+```
+
+### RESTful API
+
+```typescript
+// 获取文档当前状态
+GET /api/documents/:id/state
+
+// 获取文档版本历史
+GET /api/documents/:id/versions
+
+// 恢复到指定版本
+POST /api/documents/:id/restore
+```
+
+## 安全考虑
+
+### 操作验证
+- 验证用户编辑权限
+- 检查操作合法性
+- 防止恶意操作注入
+
+### 速率限制
+- 限制单个用户的操作频率
+- 防止 DoS 攻击
+- 智能降级处理
+
+## 写入与持久化优化方案
+
+### 1. 架构：编辑与持久化解耦
+
+在协同编辑场景中, 大部分性能问题来自「每次编辑都写数据库」。正确的架构是将「实时编辑」和「持久化存储」解耦:
+
+- 用户编辑 → WebSocket → Yjs 同步 (内存)
+- 其他用户即时看到变更
+- 后端异步、批量地将 Y.Doc 状态持久化到数据库
+
+Yjs 负责**最终一致性和协同逻辑**, 数据库只作为**快照与备份**, 不需要在每次按键时都写入。
+
+### 2. 服务端 Y.Doc 驻留与防抖持久化
+
+#### 2.1 内存中的 Y.Doc 管理
+
+在服务端维护一个简单的 Y.Doc 存储, 每个文档一个 Y.Doc, 只在收到 WebSocket 更新时操作内存:
+
+```ts
+import * as Y from "yjs";
+import { debounce } from "lodash";
+
+const docs = new Map<string, Y.Doc>();
+
+async function persistYDoc(docId: string, ydoc: Y.Doc) {
+  const update = Y.encodeStateAsUpdate(ydoc);
+  const buffer = Buffer.from(update);
+  await db
+    .update(documents)
+    .set({ yjsState: buffer, updatedAt: new Date() })
+    .where(eq(documents.id, docId));
+}
+
+export function getYDoc(docId: string) {
+  if (!docs.has(docId)) {
+    const ydoc = new Y.Doc();
+
+    const saveDebounced = debounce(() => {
+      void persistYDoc(docId, ydoc);
+    }, 5000);
+
+    ydoc.on("update", saveDebounced);
+
+    docs.set(docId, ydoc);
+  }
+
+  return docs.get(docId)!;
+}
+```
+
+要点:
+- 所有协同编辑只修改内存中的 Y.Doc, 响应快。
+- 使用防抖 (例如 5 秒) 将频繁更新压缩为少量持久化写。
+- 即使服务进程重启, 仍可从数据库中的 Yjs 状态重建 Y.Doc。
+
+#### 2.2 WebSocket 与 Y.Doc 的结合
+
+WebSocket 层只负责接收前端 Yjs update, 应用到对应的 Y.Doc:
+
+```ts
+ws.on("message", (raw) => {
+  const { documentId, update } = JSON.parse(raw.toString());
+  const ydoc = getYDoc(documentId);
+  const binary = Buffer.from(update, "base64");
+  Y.applyUpdate(ydoc, binary);
+});
+```
+
+所有协作者共享同一个 Y.Doc, Yjs 负责增量同步和冲突解决, 不需要在这里调用任何 REST 更新接口。
+
+### 3. Redis 缓存与版本号策略
+
+在加载文档时, 可以将「Yjs 快照」或「转换后的 Block 列表」缓存到 Redis, 避免每次都从数据库重建。
+
+推荐的缓存策略:
+
+- Key 示例: `doc:${documentId}`
+- Value 结构:
+  - `version`: 版本号 (时间戳或 monotonically increasing)
+  - `data`: 已转换的文档视图 (例如 Block 列表)
+
+读取时:
+
+```ts
+const cacheKey = `doc:${documentId}`;
+const cached = await redis.get<{
+  version: number;
+  data: unknown;
+}>(cacheKey);
+
+if (cached && cached.version === currentVersion) {
+  return cached.data;
+}
+```
+
+更新后:
+
+```ts
+const nextVersion = Date.now();
+const data = convertYDocToBlocks(ydoc);
+
+await redis.set(cacheKey, { version: nextVersion, data }, { ex: 60 });
+```
+
+通过版本字段, 可以避免频繁删除缓存, 降低缓存击穿的风险, 同时仍然保证数据新鲜度。
+
+### 4. 前端更新策略: WebSocket 优先, REST 降级
+
+前端在协同场景下的推荐路径:
+
+- Block 内容编辑:
+  - 直接操作本地 Y.Doc/Y.Map/Y.Text。
+  - 由 y-websocket 自动将 update 推送到服务端和其他客户端。
+  - 不再为每次按键发送 REST PATCH 请求。
+- 非协同操作:
+  - 修改文档标题、归档状态、权限等, 仍然使用 TRPC/REST 调用。
+
+这样可以显著减少无意义的更新请求, 把网络带宽和后端资源集中在真正需要的操作上。
+
+### 5. 数据库写入优化建议
+
+即使降低了写入频率, 某些场景仍然需要持久化大量数据或日志, 可以考虑:
+
+- 批量写入:
+  - 将同一时间窗口内的多条记录打包到一次事务中。
+- 只存增量:
+  - 对于操作日志或历史回溯, 使用 Yjs update 增量而非完整快照。
+- 存储类型:
+  - 使用 BYTEA 或类似二进制字段存储 Yjs 状态, 读写性能通常优于 JSONB。
+
+结合前面的架构, 可以做到:
+- 打开文档: 首选 Redis 快照, 回退到数据库中的 Yjs 状态。
+- 编辑文档: 全程在内存 Y.Doc 中操作, 由 WebSocket+Yjs 协同, 用户无感。
+- 持久化: 防抖异步写入数据库, 对前端完全透明。
+
+### 数据加密
+- WebSocket 连接使用 WSS
+- 操作数据加密传输
+- 敏感信息保护
+
+## 监控与调试
+
+### 性能指标
+- 操作延迟统计
+- 同步成功率
+- 内存使用情况
+- 连接稳定性
+
+### 日志记录
+- 操作审计日志
+- 错误异常记录
+- 性能监控日志
+
+### 调试工具
+- 开发模式下的操作追踪
+- 状态同步调试面板
+- 网络请求监控

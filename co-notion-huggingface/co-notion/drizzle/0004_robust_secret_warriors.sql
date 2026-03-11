@@ -1,0 +1,1 @@
+ALTER TABLE "ai_shorthand_records" ADD COLUMN "audio_url" text;
